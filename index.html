@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>伊雷娜の魔法时钟</title>
+    <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&display=swap" rel="stylesheet">
+    <!-- 引入轻量级开源农历/节假日库 -->
+    <script src="https://cdn.jsdelivr.net/npm/lunar-javascript/lunar.min.js"></script>
+    <style>
+        :root { --bg-url: 'https://elaina.haokun.me'; }
+        
+        body, html {
+            margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
+            font-family: 'ZCOOL KuaiLe', cursive, 'Microsoft YaHei', sans-serif;
+            background-color: #111; color: #fff;
+            user-select: none; -webkit-user-select: none;
+        }
+
+        #magic-flash {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background: radial-gradient(circle, rgba(200,200,255,0.4) 0%, rgba(0,0,0,0) 80%);
+            opacity: 0; pointer-events: none; z-index: 5;
+            transition: opacity 0.5s ease-out; box-shadow: inset 0 0 100px rgba(255,255,255,0.1);
+        }
+
+        .bg-layer {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            background-size: cover; background-position: center;
+            transition: opacity 1.5s ease-in-out; z-index: 0;
+        }
+        #bg1 { opacity: 1; } #bg2 { opacity: 0; }
+        
+        #particle-container {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none; z-index: 1; overflow: hidden;
+        }
+        .particle { position: absolute; top: -10%; animation: fall linear forwards; }
+        .sakura { background-color: #ffb7c5; border-radius: 100% 0 100% 0; box-shadow: 0 0 5px rgba(255, 183, 197, 0.5); }
+        .rain { width: 2px !important; height: 25px !important; background: rgba(255, 255, 255, 0.6); border-radius: 0; box-shadow: 0 0 2px rgba(255,255,255,0.5); }
+        .snow { width: 6px !important; height: 6px !important; background: #fff; border-radius: 50%; box-shadow: 0 0 5px rgba(255,255,255,0.8); }
+        @keyframes fall { to { transform: translateY(110vh) rotate(720deg); } }
+        .particle-windy { animation: blowAway linear forwards !important; }
+        @keyframes blowAway { to { transform: translate(100vw, 100vh) rotate(1000deg); } }
+
+        .widget {
+            position: absolute; z-index: 10;
+            background: rgba(0, 0, 0, 0.35); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+            border-radius: 16px; padding: 12px 18px;
+            border: 1px solid rgba(255, 255, 255, 0.15); box-shadow: 0 4px 15px rgba(0,0,0,0.4);
+            text-shadow: 0 2px 4px rgba(0,0,0,0.8);
+        }
+
+        /* 1. 左上角：时间、日期、农历与详细天气 */
+        .top-left { top: 25px; left: 25px; max-width: 60vw; }
+        #time { font-size: 3.5rem; line-height: 1; letter-spacing: 2px; margin-bottom: 5px; }
+        .date-info { font-size: 0.95rem; opacity: 0.9; letter-spacing: 1px; margin-bottom: 8px; }
+        #lunar-date { color: #a1c4fd; margin-left: 8px; font-size: 0.85rem; }
+        #holiday-tag { color: #ff9a9e; margin-left: 8px; font-size: 0.85rem; font-weight: bold; }
+        
+        .weather-module { cursor: pointer; transition: opacity 0.2s; font-size: 0.85rem; line-height: 1.4; opacity: 0.9; }
+        .weather-module:active { opacity: 0.6; }
+        #weather-main { color: #81ecec; font-size: 0.95rem; display: block; }
+        #weather-details { color: #c8d6e5; display: block; }
+        #weather-advice { color: #fdf6e3; display: block; margin-top: 2px; font-style: italic; }
+
+        /* 2. 右上角：电量与周末倒计时 */
+        .top-right { top: 25px; right: 25px; text-align: right; color: #ffeb3b; }
+        #battery { font-size: 1.2rem; margin-bottom: 5px; display: block; }
+        #weekend-countdown { font-size: 0.85rem; opacity: 0.85; }
+
+        /* 3. 左下角：魔女语录 */
+        .bottom-left { bottom: 25px; left: 25px; max-width: 45vw; cursor: pointer; transition: transform 0.2s cubic-bezier(0.175, 0.885, 0.32, 1.275); }
+        .bottom-left:active { transform: scale(0.95); background: rgba(0, 0, 0, 0.5); }
+        #hitokoto-text { font-size: 0.95rem; line-height: 1.4; display: block; }
+        #hitokoto-author { display: block; margin-top: 5px; font-size: 0.8rem; color: #c8d6e5; text-align: right; }
+
+        /* 4. 右下角：课表 + 今日进度 */
+        .bottom-right { bottom: 25px; right: 25px; width: 35vw; min-width: 170px; max-width: 250px; }
+        #course-module { cursor: pointer; transition: opacity 0.2s; }
+        #course-module:active { opacity: 0.6; }
+        #course-title { font-size: 0.95rem; color: #ffeb3b; display: block; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: bold;}
+        #course-info { font-size: 0.8rem; opacity: 0.85; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
+        
+        .divider { border: none; border-top: 1px dashed rgba(255, 255, 255, 0.3); margin: 10px 0; }
+        .progress-label { font-size: 0.8rem; margin-bottom: 6px; display: flex; justify-content: space-between; }
+        .progress-bar { width: 100%; height: 6px; background: rgba(255, 255, 255, 0.2); border-radius: 3px; overflow: hidden; }
+        .progress-fill { height: 100%; background: linear-gradient(90deg, #a1c4fd 0%, #c2e9fb 100%); width: 0%; transition: width 1s ease; box-shadow: 0 0 8px rgba(161, 196, 253, 0.6); }
+
+        @media (max-width: 450px) {
+            .top-left { top: 15px; left: 15px; max-width: 65vw; } .top-right { top: 15px; right: 15px; }
+            .bottom-left { bottom: 15px; left: 15px; max-width: 55vw; } .bottom-right { bottom: 15px; right: 15px; width: 35vw; min-width: 150px; }
+            #time { font-size: 2.8rem; } #hitokoto-text, #weather-main { font-size: 0.85rem; }
+            #weather-details, #weather-advice { font-size: 0.75rem; }
+        }
+    </style>
+</head>
+<body>
+    <input type="file" id="ics-upload" accept=".ics" style="display: none;">
+
+    <div id="magic-flash"></div>
+
+    <div id="bg1" class="bg-layer"></div>
+    <div id="bg2" class="bg-layer"></div>
+    <div id="particle-container"></div>
+
+    <div class="widget top-left">
+        <div id="time">00:00</div>
+        <div class="date-info">
+            <span id="date">--月--日 星期-</span>
+            <span id="lunar-date">农历--</span>
+            <span id="holiday-tag"></span>
+        </div>
+        <div class="weather-module" onclick="fetchWeather()" title="点击刷新气象">
+            <span id="weather-main">🪄 天气感知中...</span>
+            <span id="weather-details"></span>
+            <span id="weather-advice"></span>
+        </div>
+    </div>
+
+    <div class="widget top-right">
+        <span id="battery">🔋 --%</span>
+        <span id="weekend-countdown">周末计算中...</span>
+    </div>
+
+    <div class="widget bottom-left" onclick="fetchWitchQuote()" title="获取魔女的洞察">
+        <span id="hitokoto-text">魔女正在记录世界...</span>
+        <span id="hitokoto-author"></span>
+    </div>
+
+    <div class="widget bottom-right">
+        <div id="course-module" onclick="document.getElementById('ics-upload').click()">
+            <span id="course-title">📅 点击导入课表(.ics)</span>
+            <span id="course-info">支持 WakeUp 导出文件</span>
+        </div>
+        <hr class="divider">
+        <div class="progress-label">
+            <span>今日进度</span><span id="progress-text">0%</span>
+        </div>
+        <div class="progress-bar">
+            <div class="progress-fill" id="progress-fill"></div>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = 'https://elaina.haokun.me'; 
+        const BG_SWITCH_MINUTES = 5; 
+        let currentWeatherType = 'sakura'; 
+
+        // ================= 1. 气象感知：湿度、体感与生活建议 =================
+        async function fetchWeather() {
+            try {
+                const geoRes = await fetch('https://get.geojs.io/v1/ip/geo.json');
+                const geoData = await geoRes.json();
+                const lat = geoData.latitude; const lon = geoData.longitude;
+
+                // 升级版 API 参数：加入了相对湿度和体感温度
+                const weatherRes = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code`);
+                const weatherData = await weatherRes.json();
+                
+                const current = weatherData.current;
+                const code = current.weather_code;
+                const temp = current.temperature_2m;
+                const feelsLike = current.apparent_temperature;
+                const humidity = current.relative_humidity_2m;
+                
+                let icon = '☁️'; let text = '多云'; let advice = '是个适合旅行的好天气。';
+                currentWeatherType = 'sakura'; 
+
+                if (code === 0) { icon = '☀️'; text = '晴朗'; }
+                else if (code >= 1 && code <= 3) { icon = '⛅'; text = '多云'; }
+                else if (code >= 45 && code <= 48) { icon = '🌫️'; text = '雾'; }
+                else if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82)) { 
+                    icon = '🌧️'; text = '降雨'; currentWeatherType = 'rain'; 
+                }
+                else if ((code >= 71 && code <= 77) || code === 85 || code === 86) { 
+                    icon = '❄️'; text = '降雪'; currentWeatherType = 'snow'; 
+                }
+                else if (code >= 95) { icon = '⛈️'; text = '雷阵雨'; currentWeatherType = 'rain'; }
+
+                // 智能生活建议逻辑
+                if (currentWeatherType === 'rain') advice = '下雨了，记得带伞，保护好随身的魔法书。';
+                else if (currentWeatherType === 'snow') advice = '下雪了，气温骤降，注意保暖。';
+                else if (code >= 45 && code <= 48) advice = '雾气弥漫，飞行或出行请注意安全。';
+                else if (temp > 30) advice = '阳光刺眼，注意防暑防晒。';
+                else if (feelsLike < 10) advice = '气温较低，建议多穿些衣服。';
+                else if (humidity > 80) advice = '空气有些潮湿闷热，注意通风。';
+                else if (humidity < 30) advice = '空气干燥，记得多喝水。';
+
+                document.getElementById('weather-main').textContent = `${icon} ${text} ${temp}°C`;
+                document.getElementById('weather-details').textContent = `体感 ${feelsLike}°C | 湿度 ${humidity}%`;
+                document.getElementById('weather-advice').textContent = `* ${advice}`;
+
+            } catch (err) {
+                console.error(err);
+                document.getElementById('weather-main').textContent = "🌐 气象魔法中断";
+                document.getElementById('weather-details').textContent = "";
+                document.getElementById('weather-advice').textContent = "";
+            }
+        }
+
+        // ================= 2. 隐藏彩蛋 =================
+        let pressTimer; let isPressing = false;
+        document.body.addEventListener('mousedown', startPress);
+        document.body.addEventListener('touchstart', startPress);
+        document.body.addEventListener('mouseup', cancelPress);
+        document.body.addEventListener('touchend', cancelPress);
+        document.body.addEventListener('touchmove', cancelPress);
+
+        function startPress(e) {
+            if (e.target.closest('.widget')) return; 
+            isPressing = true;
+            pressTimer = setTimeout(() => { if (isPressing) triggerMagicExplosion(); }, 1500);
+        }
+        function cancelPress() { isPressing = false; clearTimeout(pressTimer); }
+        function triggerMagicExplosion() {
+            const flash = document.getElementById('magic-flash');
+            flash.style.opacity = '1'; setTimeout(() => { flash.style.opacity = '0'; }, 600);
+            document.getElementById('hitokoto-text').innerText = "「你在期待什么奇迹发生吗？可惜，这里只有一位美丽的魔女。」";
+            document.getElementById('hitokoto-author').innerText = "—— 灰之魔女 伊蕾娜";
+            changeBackground(); 
+        }
+
+        let lastX=0, lastY=0, lastZ=0; let shakeCooldown = false; const SHAKE_THRESHOLD = 15;
+        window.addEventListener('devicemotion', (e) => {
+            let acc = e.accelerationIncludingGravity; if(!acc || shakeCooldown) return;
+            let deltaX = Math.abs(acc.x - lastX); let deltaY = Math.abs(acc.y - lastY); let deltaZ = Math.abs(acc.z - lastZ);
+            if ((deltaX + deltaY + deltaZ) > SHAKE_THRESHOLD) triggerShakeEvent();
+            lastX = acc.x; lastY = acc.y; lastZ = acc.z;
+        });
+
+        function triggerShakeEvent() {
+            shakeCooldown = true;
+            document.getElementById('hitokoto-text').innerText = "「遭遇不明气流！请不要随便摇晃别人的世界好吗？」";
+            document.getElementById('hitokoto-author').innerText = "—— 紧抓扫帚的旅人";
+            const particles = document.querySelectorAll('.particle');
+            particles.forEach(p => { p.classList.add('particle-windy'); p.style.animationDuration = '1.5s'; });
+            setTimeout(() => { shakeCooldown = false; fetchWitchQuote(); }, 5000);
+        }
+
+        // ================= 3. 动态环境粒子 =================
+        function createParticle() {
+            const container = document.getElementById('particle-container');
+            const maxCount = currentWeatherType === 'rain' ? 30 : 15; 
+            if (container.childElementCount > maxCount) return;
+            const particle = document.createElement('div');
+            particle.classList.add('particle', currentWeatherType);
+            const size = Math.random() * 8 + 6; 
+            particle.style.left = `${Math.random() * 100}vw`;
+            if (currentWeatherType === 'rain') particle.style.animationDuration = `${Math.random() * 1 + 1.5}s`; 
+            else if (currentWeatherType === 'snow') particle.style.animationDuration = `${Math.random() * 5 + 8}s`; 
+            else { particle.style.width = `${size}px`; particle.style.height = `${size}px`; particle.style.animationDuration = `${Math.random() * 4 + 5}s`; }
+            particle.style.opacity = Math.random() * 0.5 + 0.3;
+            container.appendChild(particle);
+            setTimeout(() => { if (particle.parentNode) particle.remove(); }, 9000);
+        }
+
+        // ================= 4. 魔女语录库 =================
+        const witchQuotes =[
+            { text: "那个美丽可爱如天仙一般的少女是谁呢？没错，就是我！", author: "伊蕾娜" },
+            { text: "我是魔女，是一名旅人。在广阔的世界中，我只是顺道经过罢了。", author: "伊蕾娜" },
+            { text: "相遇本身就是一种魔法，离别是为了踏上新的旅程。", author: "《魔女之旅》" },
+            { text: "只要能够在这广阔的世界上随心所欲地飞翔，我就别无所求了。", author: "旅行日记" },
+            { text: "不要为了不属于你的东西哭泣。", author: "芙兰老师的教诲" },
+            { text: "这世上所有的不期而遇，都是理所当然的巧合。", author: "《魔女之旅》" },
+            { text: "我的扫帚可是很贵的，要是碰坏了，可是要收修理费的哦。", author: "务实的魔女" },
+            { text: "请不要随便搭话，这位美丽的魔女正在安静地思考人生。", author: "自恋发言" },
+            { text: "书上的故事总是有个美好的结局，但现实的旅行可不会总如人意。", author: "伊蕾娜" },
+            { text: "有时候，只是冷眼旁观，也是一种温柔。", author: "灰之魔女" },
+            { text: "时间对所有人都是平等的流逝，但经历却取决于你自己。", author: "《魔女之旅》" }
+        ];
+
+        function fetchWitchQuote() {
+            if (shakeCooldown) return; 
+            const randomIndex = Math.floor(Math.random() * witchQuotes.length);
+            document.getElementById('hitokoto-text').innerText = `「${witchQuotes[randomIndex].text}」`;
+            document.getElementById('hitokoto-author').innerText = `—— ${witchQuotes[randomIndex].author}`;
+        }
+
+        // ================= 5. 时钟、农历与进度 =================
+        function updateTime() {
+            const now = new Date();
+            const hours = String(now.getHours()).padStart(2, '0');
+            const minutes = String(now.getMinutes()).padStart(2, '0');
+            document.getElementById('time').textContent = `${hours}:${minutes}`;
+
+            const month = now.getMonth() + 1; const date = now.getDate();
+            const days =['星期日', '星期一', '星期二', '星期三', '星期四', '星期五', '星期六'];
+            const dayIdx = now.getDay();
+            document.getElementById('date').textContent = `${month}月${date}日 ${days[dayIdx]}`;
+
+            // 农历与节假日解析 (基于 lunar-javascript 库)
+            if (typeof Lunar !== 'undefined') {
+                const lunarDate = Lunar.fromDate(now);
+                document.getElementById('lunar-date').textContent = `${lunarDate.getMonthInChinese()}月${lunarDate.getDayInChinese()}`;
+                
+                let holiday = '';
+                const festivals = lunarDate.getFestivals();
+                if (festivals.length > 0) holiday = festivals[0];
+                else {
+                    const solarFestivals = Solar.fromDate(now).getFestivals();
+                    if (solarFestivals.length > 0) holiday = solarFestivals[0];
+                    else {
+                        const jieqi = lunarDate.getJieQi();
+                        if (jieqi) holiday = jieqi;
+                    }
+                }
+                document.getElementById('holiday-tag').textContent = holiday ? `[${holiday}]` : '';
+            }
+
+            let weekendText = (dayIdx === 6 || dayIdx === 0) ? '✨ 已经是周末啦！' : `⏳ 距周末还有 ${6 - dayIdx} 天`;
+            document.getElementById('weekend-countdown').textContent = weekendText;
+
+            const totalSecondsInDay = 24 * 60 * 60;
+            const passedSeconds = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
+            const progressPercent = ((passedSeconds / totalSecondsInDay) * 100).toFixed(1);
+            document.getElementById('progress-text').textContent = `${progressPercent}%`;
+            document.getElementById('progress-fill').style.width = `${progressPercent}%`;
+
+            if (now.getSeconds() === 0 && document.getElementById('course-title').textContent !== '📅 点击导入课表(.ics)') {
+                updateCourseDisplay(); 
+            }
+        }
+
+        // ================= 6. 课表解析与 X天后 智能计算 =================
+        document.getElementById('ics-upload').addEventListener('change', function(e) {
+            const file = e.target.files[0]; if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                const events=[], lines=e.target.result.split(/\r?\n/); let curr=null;
+                for (let i=0; i<lines.length; i++) {
+                    let line=lines[i]; while(i+1<lines.length && (lines[i+1].startsWith(' ') || lines[i+1].startsWith('\t'))){ line+=lines[i+1].substring(1); i++; }
+                    if (line.startsWith('BEGIN:VEVENT')) curr={};
+                    else if (line.startsWith('END:VEVENT')){ if(curr && curr.start) { if(curr.rrule) expandRRULE(curr,events); else events.push(curr); } curr=null; }
+                    else if (curr){
+                        if (line.startsWith('SUMMARY:')) curr.title=line.substring(8).trim();
+                        else if (line.startsWith('LOCATION:')) curr.location=line.substring(9).trim();
+                        else if (line.startsWith('DTSTART')){ let m=line.match(/:(\d{8}T\d{6}Z?)/); if(m) curr.start=parseICSTime(m[1]); }
+                        else if (line.startsWith('DTEND')){ let m=line.match(/:(\d{8}T\d{6}Z?)/); if(m) curr.end=parseICSTime(m[1]); }
+                        else if (line.startsWith('RRULE:')) curr.rrule=line.substring(6).trim();
+                    }
+                }
+                if (events.length>0){ localStorage.setItem('elaina_courses',JSON.stringify(events)); alert("✅ 课表信息记录完成。"); updateCourseDisplay(); }
+            }; reader.readAsText(file);
+        });
+
+        function expandRRULE(event, eventsArray) {
+            let cs=new Date(event.start), ce=new Date(event.end), r=event.rrule;
+            let interval=r.match(/INTERVAL=(\d+)/)?parseInt(RegExp.$1):1, count=r.match(/COUNT=(\d+)/)?parseInt(RegExp.$1):30;
+            let u=r.match(/UNTIL=(\d{8}T\d{6}Z?)/), ud=u?parseICSTime(u[1]):null;
+            for(let i=0;i<count;i++){
+                if(ud && cs.getTime()>ud) break;
+                eventsArray.push({title:event.title,location:event.location,start:cs.getTime(),end:ce.getTime()});
+                cs.setDate(cs.getDate()+7*interval); ce.setDate(ce.getDate()+7*interval);
+            }
+        }
+
+        function parseICSTime(s) { return new Date(s.substring(0,4),s.substring(4,6)-1,s.substring(6,8),s.substring(9,11),s.substring(11,13),s.substring(13,15)).getTime(); }
+
+        function updateCourseDisplay() {
+            const stored = localStorage.getItem('elaina_courses'); if(!stored) return;
+            const nowTime = Date.now();
+            const courses = JSON.parse(stored).filter(c=>c.end > nowTime).sort((a,b)=>a.start-b.start);
+            if(courses.length===0){
+                document.getElementById('course-title').textContent="✨ 近期无课"; document.getElementById('course-info').textContent="享受自由时光吧"; return;
+            }
+            const next=courses[0], sd=new Date(next.start), ed=new Date(next.end), loc=next.location||'未知';
+            const fmt=(d)=>String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0');
+            
+            if(nowTime >= next.start && nowTime <= next.end){
+                document.getElementById('course-title').textContent=`📚 正在上课: ${next.title}`; 
+                document.getElementById('course-info').textContent=`${fmt(sd)}-${fmt(ed)} @ ${loc}`;
+            }else{
+                // 计算相差的天数 (抹平具体时间，只看日期)
+                const todayZero = new Date().setHours(0,0,0,0);
+                const targetZero = new Date(next.start).setHours(0,0,0,0);
+                const diffDays = Math.round((targetZero - todayZero) / (1000 * 60 * 60 * 24));
+                
+                let dayLabel = '';
+                if (diffDays === 0) dayLabel = "今日";
+                else if (diffDays === 1) dayLabel = "明日";
+                else if (diffDays === 2) dayLabel = "后天";
+                else dayLabel = `${diffDays}天后`;
+
+                document.getElementById('course-title').textContent=`➡️ ${dayLabel}课程: ${next.title}`; 
+                document.getElementById('course-info').textContent=`${sd.getMonth()+1}月${sd.getDate()}日 ${fmt(sd)} @ ${loc}`;
+            }
+        }
+
+        let activeBg = 1;
+        function changeBackground() {
+            const imgUrl = `${API_URL}/?t=${new Date().getTime()}`; const img = new Image();
+            img.onload = () => {
+                const bg1 = document.getElementById('bg1'), bg2 = document.getElementById('bg2');
+                if (activeBg===1){ bg2.style.backgroundImage=`url(${imgUrl})`; bg2.style.opacity=1; bg1.style.opacity=0; activeBg=2; }
+                else { bg1.style.backgroundImage=`url(${imgUrl})`; bg1.style.opacity=1; bg2.style.opacity=0; activeBg=1; }
+            }; img.src = imgUrl;
+        }
+
+        function updateBattery() {
+            if ('getBattery' in navigator) {
+                navigator.getBattery().then(bat => {
+                    const update = () => document.getElementById('battery').textContent = `${bat.charging?'⚡':'🔋'} ${Math.round(bat.level*100)}%`;
+                    update(); bat.onchargingchange = update; bat.onlevelchange = update;
+                });
+            } else document.getElementById('battery').style.display='none';
+        }
+
+        function init() {
+            updateTime(); setInterval(updateTime, 1000); 
+            changeBackground(); setInterval(changeBackground, BG_SWITCH_MINUTES * 60 * 1000); 
+            fetchWitchQuote(); setInterval(fetchWitchQuote, 10 * 60 * 1000); 
+            updateBattery(); updateCourseDisplay(); 
+            fetchWeather(); setInterval(fetchWeather, 30 * 60 * 1000); 
+            setInterval(createParticle, 400); 
+        }
+
+        document.addEventListener('dblclick', function(e) { if (!e.target.closest('.widget')) changeBackground(); });
+        window.onload = init;
+    </script>
+</body>
+</html>
