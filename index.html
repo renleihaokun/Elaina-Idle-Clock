@@ -7,10 +7,7 @@
     <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/lunar-javascript/lunar.min.js"></script>
     <style>
-        :root { 
-            --bg-url: 'https://elaina.haokun.me'; 
-            --ui-scale: 1; /* 全局UI缩放比例 */
-        }
+        :root { --bg-url: 'https://elaina.haokun.me'; --ui-scale: 1; }
         
         body, html {
             margin: 0; padding: 0; width: 100%; height: 100%; overflow: hidden;
@@ -45,14 +42,12 @@
         .particle-windy { animation: blowAway linear forwards !important; }
         @keyframes blowAway { to { transform: translate(100vw, 100vh) rotate(1000deg); } }
 
-        /* ====== 基础组件样式 (加入了缩放引擎) ====== */
         .widget {
             position: absolute; z-index: 10;
             background: rgba(0, 0, 0, 0.35); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
             border-radius: 16px; padding: 12px 18px;
             border: 1px solid rgba(255, 255, 255, 0.15); box-shadow: 0 4px 15px rgba(0,0,0,0.4);
-            text-shadow: 0 2px 4px rgba(0,0,0,0.8);
-            transition: transform 0.1s ease-out;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.8); transition: transform 0.1s ease-out;
         }
 
         .top-left { top: 15px; left: 15px; max-width: 60vw; transform-origin: top left; transform: scale(var(--ui-scale)); }
@@ -89,22 +84,33 @@
         .progress-bar { width: 100%; height: 5px; background: rgba(255, 255, 255, 0.2); border-radius: 3px; overflow: hidden; }
         .progress-fill { height: 100%; background: linear-gradient(90deg, #a1c4fd 0%, #c2e9fb 100%); width: 0%; transition: width 1s ease; box-shadow: 0 0 8px rgba(161, 196, 253, 0.6); }
 
-        /* ====== 设置面板 ====== */
-        #settings-panel {
-            display: none; top: 50%; left: 50%; 
-            transform: translate(-50%, -50%); 
-            z-index: 100; text-align: center; width: 70vw; max-width: 300px;
-            background: rgba(0, 0, 0, 0.8); padding: 25px; border-radius: 20px;
+        /* ====== 弹出面板通用样式 ====== */
+        .modal-panel {
+            display: none; top: 50%; left: 50%; transform: translate(-50%, -50%); 
+            z-index: 100; text-align: center; width: 80vw; max-width: 320px;
+            background: rgba(0, 0, 0, 0.85); padding: 25px; border-radius: 20px;
+            border: 1px solid rgba(255, 255, 255, 0.2); position: absolute;
         }
-        #settings-panel h3 { margin: 0 0 15px 0; font-size: 1.2rem; color: #ffeb3b; }
-        #settings-panel p { font-size: 0.9rem; margin-bottom: 15px; color: #c8d6e5; }
-        input[type=range] { width: 100%; margin-bottom: 20px; accent-color: #a1c4fd; }
+        .modal-panel h3 { margin: 0 0 15px 0; font-size: 1.1rem; color: #81ecec; }
         .close-btn { 
             background: rgba(255,255,255,0.2); border: 1px solid rgba(255,255,255,0.4); 
-            color: white; padding: 8px 25px; border-radius: 10px; font-family: inherit; 
-            font-size: 1rem; cursor: pointer; transition: background 0.2s;
+            color: white; padding: 6px 20px; border-radius: 8px; font-family: inherit; 
+            font-size: 0.9rem; cursor: pointer; transition: background 0.2s; margin-top: 15px;
         }
         .close-btn:active { background: rgba(255,255,255,0.4); }
+
+        /* 缩放面板特有 */
+        #settings-panel p { font-size: 0.9rem; margin-bottom: 15px; color: #c8d6e5; }
+        input[type=range] { width: 100%; margin-bottom: 20px; accent-color: #a1c4fd; }
+
+        /* 定位面板特有 */
+        .loc-input-group { display: flex; gap: 8px; margin-bottom: 15px; }
+        #loc-input { flex: 1; padding: 8px; border-radius: 8px; border: none; outline: none; background: rgba(255,255,255,0.9); font-family: inherit; }
+        #loc-search-btn { padding: 8px 15px; border-radius: 8px; border: none; background: #a1c4fd; color: #000; font-family: inherit; cursor: pointer; font-weight: bold; }
+        #loc-results { max-height: 160px; overflow-y: auto; text-align: left; }
+        .loc-item { padding: 10px 8px; border-bottom: 1px solid rgba(255,255,255,0.1); cursor: pointer; font-size: 0.85rem; color: #c8d6e5; }
+        .loc-item:active { background: rgba(255,255,255,0.2); }
+        .loc-item-sub { display: block; font-size: 0.7rem; color: #888; margin-top: 2px; }
 
         @media (max-width: 600px) {
             .widget { padding: 10px 14px; border-radius: 12px; }
@@ -121,14 +127,14 @@
     <div id="particle-container"></div>
 
     <div class="widget top-left">
-        <!-- 点击时间呼出缩放设置 -->
-        <div id="time" onclick="toggleSettings()" title="点击调整组件大小">00:00</div>
+        <div id="time" onclick="togglePanel('settings-panel')" title="点击调整组件大小">00:00</div>
         <div class="date-info">
             <span id="date">--月--日 星期-</span>
             <span id="lunar-date">农历--</span>
             <span id="holiday-tag"></span>
         </div>
-        <div class="weather-module" onclick="fetchWeather()" title="点击刷新气象">
+        <!-- 点击天气呼出定位面板 -->
+        <div class="weather-module" onclick="togglePanel('location-panel')" title="点击手动配置地区">
             <span id="weather-main">🪄 天气感知中...</span>
             <span id="weather-details"></span>
             <span id="weather-advice"></span>
@@ -160,11 +166,22 @@
     </div>
 
     <!-- 缩放控制台 -->
-    <div id="settings-panel" class="widget">
-        <h3>⚙️ 魔法手账设置</h3>
+    <div id="settings-panel" class="modal-panel">
+        <h3 style="color: #ffeb3b;">⚙️ 魔法手账设置</h3>
         <p>组件缩放比例: <span id="scale-value">100%</span></p>
         <input type="range" id="scale-slider" min="0.5" max="1.5" step="0.05" value="1">
-        <button class="close-btn" onclick="toggleSettings()">完成</button>
+        <button class="close-btn" onclick="togglePanel('settings-panel')">完成</button>
+    </div>
+
+    <!-- 气象定位控制台 -->
+    <div id="location-panel" class="modal-panel">
+        <h3>📍 气象定位仪</h3>
+        <div class="loc-input-group">
+            <input type="text" id="loc-input" placeholder="输入城市或区县 (如:海淀区)">
+            <button id="loc-search-btn" onclick="searchLocation()">搜索</button>
+        </div>
+        <div id="loc-results"></div>
+        <button class="close-btn" onclick="togglePanel('location-panel')">关闭</button>
     </div>
 
     <script>
@@ -186,17 +203,63 @@
             localStorage.setItem('elaina_ui_scale', val); 
         });
 
-        function toggleSettings() {
-            const panel = document.getElementById('settings-panel');
+        function togglePanel(panelId) {
+            const panel = document.getElementById(panelId);
+            // 关闭其他面板
+            document.querySelectorAll('.modal-panel').forEach(p => { if(p.id !== panelId) p.style.display = 'none'; });
             panel.style.display = (panel.style.display === 'none' || panel.style.display === '') ? 'block' : 'none';
         }
 
-        // ================= 气象感知 =================
+        // ================= 气象感知与精准定位 =================
+        async function searchLocation() {
+            const query = document.getElementById('loc-input').value.trim();
+            if (!query) return;
+            const resDiv = document.getElementById('loc-results');
+            resDiv.innerHTML = '<div class="loc-item">正在通过魔法网络搜索...</div>';
+            
+            try {
+                // 使用 Open-Meteo 免费地理编码 API
+                const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=5&language=zh`);
+                const data = await res.json();
+                
+                if (!data.results || data.results.length === 0) {
+                    resDiv.innerHTML = '<div class="loc-item" style="color:#ff9a9e;">未找到该地区，请尝试输入更大的城市名。</div>';
+                    return;
+                }
+                
+                resDiv.innerHTML = '';
+                data.results.forEach(item => {
+                    const div = document.createElement('div');
+                    div.className = 'loc-item';
+                    const adminInfo =[item.admin1, item.country].filter(Boolean).join(', ');
+                    div.innerHTML = `📍 ${item.name} <span class="loc-item-sub">${adminInfo}</span>`;
+                    div.onclick = () => {
+                        localStorage.setItem('elaina_location', JSON.stringify({ lat: item.latitude, lon: item.longitude, name: item.name }));
+                        togglePanel('location-panel');
+                        document.getElementById('weather-main').textContent = "🪄 重新感知中...";
+                        fetchWeather(); // 重新拉取天气
+                    };
+                    resDiv.appendChild(div);
+                });
+            } catch (e) {
+                resDiv.innerHTML = '<div class="loc-item" style="color:#ff9a9e;">搜索失败，请检查网络。</div>';
+            }
+        }
+
         async function fetchWeather() {
             try {
-                const geoRes = await fetch('https://get.geojs.io/v1/ip/geo.json');
-                const geoData = await geoRes.json();
-                const lat = geoData.latitude; const lon = geoData.longitude;
+                let lat, lon, locName = '';
+                const savedLoc = localStorage.getItem('elaina_location');
+                
+                // 优先使用手动保存的坐标，没有则使用 IP 模糊定位
+                if (savedLoc) {
+                    const parsed = JSON.parse(savedLoc);
+                    lat = parsed.lat; lon = parsed.lon; locName = parsed.name;
+                } else {
+                    const geoRes = await fetch('https://get.geojs.io/v1/ip/geo.json');
+                    const geoData = await geoRes.json();
+                    lat = geoData.latitude; lon = geoData.longitude; locName = geoData.city || '未知坐标';
+                }
 
                 const weatherRes = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code`);
                 const weatherData = await weatherRes.json();
@@ -225,7 +288,8 @@
                 else if (humidity > 80) advice = '空气潮湿闷热，注意通风。';
                 else if (humidity < 30) advice = '空气干燥，记得多喝水。';
 
-                document.getElementById('weather-main').textContent = `${icon} ${text} ${temp}°C`;
+                // 将定位名字加到天气显示里
+                document.getElementById('weather-main').textContent = `[${locName}] ${icon} ${text} ${temp}°C`;
                 document.getElementById('weather-details').textContent = `体感 ${feelsLike}°C | 湿度 ${humidity}%`;
                 document.getElementById('weather-advice').textContent = `* ${advice}`;
             } catch (err) {
@@ -239,13 +303,13 @@
         // ================= 隐藏彩蛋 =================
         let pressTimer; let isPressing = false;
         document.body.addEventListener('mousedown', startPress);
-        document.body.addEventListener('touchstart', startPress);
+        document.body.addEventListener('touchstart', startPress, {passive: true});
         document.body.addEventListener('mouseup', cancelPress);
         document.body.addEventListener('touchend', cancelPress);
-        document.body.addEventListener('touchmove', cancelPress);
+        document.body.addEventListener('touchmove', cancelPress, {passive: true});
 
         function startPress(e) {
-            if (e.target.closest('.widget')) return; 
+            if (e.target.closest('.widget') || e.target.closest('.modal-panel')) return; 
             isPressing = true;
             pressTimer = setTimeout(() => { if (isPressing) triggerMagicExplosion(); }, 1500);
         }
@@ -444,7 +508,6 @@
             setInterval(createParticle, 400); 
         }
 
-        document.addEventListener('dblclick', function(e) { if (!e.target.closest('.widget')) changeBackground(); });
         window.onload = init;
     </script>
 </body>
