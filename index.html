@@ -44,9 +44,9 @@
 
         .widget {
             position: absolute; z-index: 10;
-            background: rgba(0, 0, 0, 0.35); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
-            border-radius: 16px; padding: 12px 18px;
-            border: 1px solid rgba(255, 255, 255, 0.15); box-shadow: 0 4px 15px rgba(0,0,0,0.4);
+            background: rgba(255, 255, 255, 0.05); backdrop-filter: blur(7px); -webkit-backdrop-filter: blur(7px);
+            border-radius: 20px; padding: 12px 18px;
+            border: 1px solid rgba(255, 255, 255, 0.12); box-shadow: 0 8px 32px rgba(0,0,0,0.2);
             text-shadow: 0 2px 4px rgba(0,0,0,0.8); transition: transform 0.1s ease-out;
         }
 
@@ -69,7 +69,7 @@
         #weekend-countdown { font-size: 0.85rem; opacity: 0.85; }
 
         .bottom-left { bottom: 15px; left: 15px; max-width: 50vw; cursor: pointer; transform-origin: bottom left; transform: scale(var(--ui-scale)); }
-        .bottom-left:active { transform: scale(calc(var(--ui-scale) * 0.95)); background: rgba(0, 0, 0, 0.5); }
+        .bottom-left:active { transform: scale(calc(var(--ui-scale) * 0.95)); background: rgba(255, 255, 255, 0.1); }
         #hitokoto-text { font-size: 0.9rem; line-height: 1.4; display: block; }
         #hitokoto-author { display: block; margin-top: 5px; font-size: 0.75rem; color: #c8d6e5; text-align: right; }
 
@@ -79,17 +79,19 @@
         #course-title { font-size: 0.9rem; color: #ffeb3b; display: block; margin-bottom: 4px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: bold;}
         #course-info { font-size: 0.75rem; opacity: 0.85; display: block; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;}
         
-        .divider { border: none; border-top: 1px dashed rgba(255, 255, 255, 0.3); margin: 8px 0; }
+        .divider { border: none; border-top: 1px dashed rgba(255, 255, 255, 0.2); margin: 8px 0; }
         .progress-label { font-size: 0.75rem; margin-bottom: 5px; display: flex; justify-content: space-between; }
-        .progress-bar { width: 100%; height: 5px; background: rgba(255, 255, 255, 0.2); border-radius: 3px; overflow: hidden; }
+        .progress-bar { width: 100%; height: 5px; background: rgba(255, 255, 255, 0.15); border-radius: 3px; overflow: hidden; }
         .progress-fill { height: 100%; background: linear-gradient(90deg, #a1c4fd 0%, #c2e9fb 100%); width: 0%; transition: width 1s ease; box-shadow: 0 0 8px rgba(161, 196, 253, 0.6); }
 
         /* ====== 弹出面板通用样式 ====== */
         .modal-panel {
             display: none; top: 50%; left: 50%; transform: translate(-50%, -50%); 
-            z-index: 100; text-align: center; width: 80vw; max-width: 320px;
-            background: rgba(0, 0, 0, 0.85); padding: 25px; border-radius: 20px;
-            border: 1px solid rgba(255, 255, 255, 0.2); position: absolute;
+            z-index: 100; text-align: center; width: 85vw; max-width: 340px;
+            background: rgba(255, 255, 255, 0.08); backdrop-filter: blur(30px); -webkit-backdrop-filter: blur(30px);
+            padding: 25px; border-radius: 24px;
+            border: 1px solid rgba(255, 255, 255, 0.15); position: absolute;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.4);
         }
         .modal-panel h3 { margin: 0 0 15px 0; font-size: 1.1rem; color: #81ecec; }
         .close-btn { 
@@ -218,23 +220,32 @@
             resDiv.innerHTML = '<div class="loc-item">正在通过魔法网络搜索...</div>';
             
             try {
-                // 使用 Open-Meteo 免费地理编码 API
-                const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(query)}&count=5&language=zh`);
+                // 使用 Nominatim API (OSM)，对中国区县支持更精准
+                const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&addressdetails=1&limit=5&accept-language=zh`);
                 const data = await res.json();
                 
-                if (!data.results || data.results.length === 0) {
-                    resDiv.innerHTML = '<div class="loc-item" style="color:#ff9a9e;">未找到该地区，请尝试输入更大的城市名。</div>';
+                if (!data || data.length === 0) {
+                    resDiv.innerHTML = '<div class="loc-item" style="color:#ff9a9e;">未找到该地区，请尝试输入更准确的名称（如：武汉洪山区）。</div>';
                     return;
                 }
                 
                 resDiv.innerHTML = '';
-                data.results.forEach(item => {
+                data.forEach(item => {
                     const div = document.createElement('div');
                     div.className = 'loc-item';
-                    const adminInfo =[item.admin1, item.country].filter(Boolean).join(', ');
-                    div.innerHTML = `📍 ${item.name} <span class="loc-item-sub">${adminInfo}</span>`;
+                    
+                    // 提取更友好的名称：优先显示区县/街道名
+                    const addr = item.address;
+                    const mainName = addr.district || addr.borough || addr.suburb || addr.city_district || addr.town || addr.village || item.display_name.split(',')[0];
+                    const subName = [addr.city, addr.province].filter(v => v && v !== mainName).join(', ');
+                    
+                    div.innerHTML = `📍 ${mainName} <span class="loc-item-sub">${subName || item.display_name}</span>`;
                     div.onclick = () => {
-                        localStorage.setItem('elaina_location', JSON.stringify({ lat: item.latitude, lon: item.longitude, name: item.name }));
+                        localStorage.setItem('elaina_location', JSON.stringify({ 
+                            lat: item.lat, 
+                            lon: item.lon, 
+                            name: mainName 
+                        }));
                         togglePanel('location-panel');
                         document.getElementById('weather-main').textContent = "🪄 重新感知中...";
                         fetchWeather(); // 重新拉取天气
@@ -242,7 +253,8 @@
                     resDiv.appendChild(div);
                 });
             } catch (e) {
-                resDiv.innerHTML = '<div class="loc-item" style="color:#ff9a9e;">搜索失败，请检查网络。</div>';
+                console.error(e);
+                resDiv.innerHTML = '<div class="loc-item" style="color:#ff9a9e;">搜索失败，请检查网络或稍后再试。</div>';
             }
         }
 
@@ -357,17 +369,17 @@
 
         // ================= 魔女语录 =================
         const witchQuotes =[
-            { text: "那个美丽可爱如天仙一般的少女是谁呢？没错，就是我！", author: "伊蕾娜" },
-            { text: "我是魔女，是一名旅人。在广阔的世界中，我只是顺道经过罢了。", author: "伊蕾娜" },
-            { text: "相遇本身就是一种魔法，离别是为了踏上新的旅程。", author: "《魔女之旅》" },
-            { text: "只要能够在这广阔的世界上随心所欲地飞翔，我就别无所求了。", author: "旅行日记" },
-            { text: "不要为了不属于你的东西哭泣。", author: "芙兰老师的教诲" },
-            { text: "这世上所有的不期而遇，都是理所当然的巧合。", author: "《魔女之旅》" },
-            { text: "我的扫帚可是很贵的，要是碰坏了，可是要收修理费的哦。", author: "务实的魔女" },
-            { text: "请不要随便搭话，这位美丽的魔女正在安静地思考人生。", author: "自恋发言" },
+            { text: "这种美丽可爱，甚至有些令人怜爱的美少女到底是谁呢？没错，就是我。", author: "伊蕾娜" },
+            { text: "请不要在意。我是旅人，得继续赶路才行。", author: "伊蕾娜" },
+            { text: "别哭，伊蕾娜。重要的不是结果，而是你在这个过程中学到了什么。", author: "芙兰" },
+            { text: "在这个广阔的世界里，我只是一个顺路经过的魔女。", author: "伊蕾娜" },
+            { text: "哪怕是被雨淋湿，被泥沾污，也一定要坚持走下去。", author: "伊蕾娜" },
+            { text: "我是一个旅人。我必须继续我的旅行。", author: "伊蕾娜" },
+            { text: "不要为了不属于你的东西哭泣。无论多么痛苦，都要学会接受它。", author: "芙兰" },
+            { text: "如果不努力的话，就没有权利去追求梦想。", author: "芙兰" },
+            { text: "这世上所有的不期而遇，都是理所当然的巧合。", author: "伊蕾娜" },
             { text: "书上的故事总是有个美好的结局，但现实的旅行可不会总如人意。", author: "伊蕾娜" },
-            { text: "有时候，只是冷眼旁观，也是一种温柔。", author: "灰之魔女" },
-            { text: "时间对所有人都是平等的流逝，但经历却取决于你自己。", author: "《魔女之旅》" }
+            { text: "如果不经历痛苦，人类是不会成长的。正因为痛苦，我们才会寻找出路。", author: "《魔女之旅》" }
         ];
 
         function fetchWitchQuote() {
