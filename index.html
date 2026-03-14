@@ -182,6 +182,7 @@
             <input type="text" id="loc-input" placeholder="输入城市或区县 (如:海淀区)">
             <button id="loc-search-btn" onclick="searchLocation()">搜索</button>
         </div>
+        <button class="close-btn" style="width:100%; margin: 0 0 15px 0; background: rgba(161, 196, 253, 0.7); color: #000; font-weight: bold;" onclick="autoLocate()">🎯 自动获取当前精准坐标</button>
         <div id="loc-results"></div>
         <button class="close-btn" onclick="togglePanel('location-panel')">关闭</button>
     </div>
@@ -213,49 +214,101 @@
         }
 
         // ================= 气象感知与精准定位 =================
+        async function autoLocate() {
+            const resDiv = document.getElementById('loc-results');
+            resDiv.innerHTML = '<div class="loc-item">正在向设备请求定位权限...</div>';
+            
+            if (!navigator.geolocation) {
+                resDiv.innerHTML = '<div class="loc-item" style="color:#ff9a9e;">您的设备不支持地理定位。</div>';
+                return;
+            }
+
+            navigator.geolocation.getCurrentPosition(async position => {
+                const lat = position.coords.latitude;
+                const lon = position.coords.longitude;
+                resDiv.innerHTML = '<div class="loc-item">坐标获取成功，正在解析...</div>';
+                
+                try {
+                    // 使用大数据的免费反向地理编码 API 提升体验
+                    const res = await fetch(`https://api.bigdatacloud.net/data/reverse-geocode-client?latitude=${lat}&longitude=${lon}&localityLanguage=zh`);
+                    const data = await res.json();
+                    let locName = data.locality || data.city || "当前位置";
+                    
+                    localStorage.setItem('elaina_location', JSON.stringify({ 
+                        lat: lat, 
+                        lon: lon, 
+                        name: locName 
+                    }));
+                    togglePanel('location-panel');
+                    document.getElementById('weather-main').textContent = "🪄 气象重构中...";
+                    fetchWeather();
+                } catch(e) {
+                    // 反查失败也直接使用坐标
+                    localStorage.setItem('elaina_location', JSON.stringify({ lat: lat, lon: lon, name: "当前位置" }));
+                    togglePanel('location-panel');
+                    document.getElementById('weather-main').textContent = "🪄 气象重构中...";
+                    fetchWeather();
+                }
+            }, error => {
+                let msg = '定位失败。';
+                if (error.code === 1) msg = '您拒绝了浏览器的定位权限请求。';
+                else if (error.code === 2) msg = '无法获取当前位置，请检查设备。';
+                else if (error.code === 3) msg = '获取位置超时。';
+                resDiv.innerHTML = `<div class="loc-item" style="color:#ff9a9e;">${msg}</div>`;
+            }, { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 });
+        }
+
         async function searchLocation() {
-            const query = document.getElementById('loc-input').value.trim();
+            let query = document.getElementById('loc-input').value.trim();
             if (!query) return;
             const resDiv = document.getElementById('loc-results');
-            resDiv.innerHTML = '<div class="loc-item">正在通过魔法网络搜索...</div>';
+            resDiv.innerHTML = '<div class="loc-item">正在穿透网络迷雾...</div>';
             
-            try {
-                // 使用 Nominatim API (OSM)，对中国区县支持更精准
-                const res = await fetch(`https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&addressdetails=1&limit=5&accept-language=zh`);
-                const data = await res.json();
-                
-                if (!data || data.length === 0) {
-                    resDiv.innerHTML = '<div class="loc-item" style="color:#ff9a9e;">未找到该地区，请尝试输入更准确的名称（如：武汉洪山区）。</div>';
-                    return;
-                }
-                
-                resDiv.innerHTML = '';
-                data.forEach(item => {
-                    const div = document.createElement('div');
-                    div.className = 'loc-item';
-                    
-                    // 提取更友好的名称：优先显示区县/街道名
-                    const addr = item.address;
-                    const mainName = addr.district || addr.borough || addr.suburb || addr.city_district || addr.town || addr.village || item.display_name.split(',')[0];
-                    const subName = [addr.city, addr.province].filter(v => v && v !== mainName).join(', ');
-                    
-                    div.innerHTML = `📍 ${mainName} <span class="loc-item-sub">${subName || item.display_name}</span>`;
-                    div.onclick = () => {
-                        localStorage.setItem('elaina_location', JSON.stringify({ 
-                            lat: item.lat, 
-                            lon: item.lon, 
-                            name: mainName 
-                        }));
-                        togglePanel('location-panel');
-                        document.getElementById('weather-main').textContent = "🪄 重新感知中...";
-                        fetchWeather(); // 重新拉取天气
-                    };
-                    resDiv.appendChild(div);
-                });
-            } catch (e) {
-                console.error(e);
-                resDiv.innerHTML = '<div class="loc-item" style="color:#ff9a9e;">搜索失败，请检查网络或稍后再试。</div>';
+            async function performSearch(searchTerm) {
+                try {
+                    const res = await fetch(`https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(searchTerm)}&count=10&language=zh`);
+                    const data = await res.json();
+                    return data.results || [];
+                } catch (e) { return []; }
             }
+
+            // 第一次尝试：完整搜索
+            let results = await performSearch(query);
+            
+            // 第二次尝试：如果没结果且长度大于2，尝试搜城市简称（前2个字）
+            if (results.length === 0 && query.length > 2) {
+                const fallbackQuery = query.substring(0, 2);
+                results = await performSearch(fallbackQuery);
+            }
+
+            if (results.length === 0) {
+                resDiv.innerHTML = `<div class="loc-item" style="color:#ff9a9e;">
+                    未找到 "${query}"。<br>
+                    <small>💡 提示：请尝试搜索地级市名称（如：苏州、武汉）。</small>
+                </div>`;
+                return;
+            }
+
+            resDiv.innerHTML = '';
+            results.forEach(item => {
+                const div = document.createElement('div');
+                div.className = 'loc-item';
+                // 构造展示名：地名 + 省份/城市
+                const admin = [item.admin2, item.admin1, item.country].filter(v => v && v !== item.name).slice(0, 2).join(', ');
+                div.innerHTML = `📍 ${item.name} <span class="loc-item-sub">${admin || '未知地区'}</span>`;
+                
+                div.onclick = () => {
+                    localStorage.setItem('elaina_location', JSON.stringify({ 
+                        lat: item.latitude, 
+                        lon: item.longitude, 
+                        name: item.name 
+                    }));
+                    togglePanel('location-panel');
+                    document.getElementById('weather-main').textContent = "🪄 气象重构中...";
+                    fetchWeather();
+                };
+                resDiv.appendChild(div);
+            });
         }
 
         async function fetchWeather() {
