@@ -1,0 +1,444 @@
+:root {
+    --bg-url: 'https://elaina.haokun.me';
+    --ui-scale: 1;
+}
+
+body, html {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    font-family: 'ZCOOL KuaiLe', cursive, 'Microsoft YaHei', sans-serif;
+    background-color: #111;
+    color: #fff;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+#magic-flash {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: radial-gradient(circle, rgba(200, 200, 255, 0.4) 0%, rgba(0, 0, 0, 0) 80%);
+    opacity: 0;
+    pointer-events: none;
+    z-index: 5;
+    transition: opacity 0.5s ease-out;
+    box-shadow: inset 0 0 100px rgba(255, 255, 255, 0.1);
+}
+
+.bg-layer {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-size: cover;
+    background-position: center;
+    transition: opacity 1.5s ease-in-out;
+    z-index: 0;
+}
+
+#bg1 { opacity: 1; }
+#bg2 { opacity: 0; }
+
+#particle-container {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+    z-index: 1;
+    overflow: hidden;
+}
+
+.particle {
+    position: absolute;
+    top: -10%;
+    animation: fall linear forwards;
+}
+
+.sakura {
+    background-color: #ffb7c5;
+    border-radius: 100% 0 100% 0;
+    box-shadow: 0 0 5px rgba(255, 183, 197, 0.5);
+}
+
+.rain {
+    width: 2px !important;
+    height: 25px !important;
+    background: rgba(255, 255, 255, 0.6);
+    border-radius: 0;
+    box-shadow: 0 0 2px rgba(255, 255, 255, 0.5);
+}
+
+.snow {
+    width: 6px !important;
+    height: 6px !important;
+    background: #fff;
+    border-radius: 50%;
+    box-shadow: 0 0 5px rgba(255, 255, 255, 0.8);
+}
+
+@keyframes fall {
+    to { transform: translateY(110vh) rotate(720deg); }
+}
+
+.particle-windy {
+    animation: blowAway linear forwards !important;
+}
+
+@keyframes blowAway {
+    to { transform: translate(100vw, 100vh) rotate(1000deg); }
+}
+
+.widget {
+    position: absolute;
+    z-index: 10;
+    background: rgba(255, 255, 255, 0.05);
+    backdrop-filter: blur(7px);
+    -webkit-backdrop-filter: blur(7px);
+    border-radius: 20px;
+    padding: 12px 18px;
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+    text-shadow: 0 2px 4px rgba(0, 0, 0, 0.8);
+    transition: transform 0.1s ease-out;
+}
+
+.top-left {
+    top: 15px;
+    left: 15px;
+    max-width: 60vw;
+    transform-origin: top left;
+    transform: scale(var(--ui-scale));
+}
+
+#time {
+    font-size: 3.2rem;
+    line-height: 1;
+    letter-spacing: 2px;
+    margin-bottom: 5px;
+    cursor: pointer;
+    transition: color 0.2s;
+    display: block;
+}
+
+#time:active { color: #ffeb3b; }
+
+.date-info {
+    font-size: 0.9rem;
+    opacity: 0.9;
+    letter-spacing: 1px;
+    margin-bottom: 8px;
+}
+
+#lunar-date {
+    color: #a1c4fd;
+    margin-left: 8px;
+    font-size: 0.8rem;
+}
+
+#holiday-tag {
+    color: #ff9a9e;
+    display: block;
+    margin-top: 4px;
+    font-size: 0.8rem;
+    font-weight: bold;
+}
+
+.weather-module {
+    cursor: pointer;
+    transition: opacity 0.2s;
+    font-size: 0.85rem;
+    line-height: 1.4;
+    opacity: 0.9;
+}
+
+.weather-module:active { opacity: 0.6; }
+
+#weather-main {
+    color: #81ecec;
+    font-size: 0.95rem;
+    display: block;
+}
+
+#weather-details {
+    color: #c8d6e5;
+    display: block;
+}
+
+#weather-advice {
+    color: #fdf6e3;
+    display: block;
+    margin-top: 2px;
+    font-style: italic;
+}
+
+.top-right {
+    top: 15px;
+    right: 15px;
+    text-align: right;
+    color: #ffeb3b;
+    transform-origin: top right;
+    transform: scale(var(--ui-scale));
+}
+
+#battery {
+    font-size: 1.1rem;
+    margin-bottom: 5px;
+    display: block;
+}
+
+#weekend-countdown {
+    font-size: 0.85rem;
+    opacity: 0.85;
+}
+
+.bottom-left {
+    bottom: 15px;
+    left: 15px;
+    max-width: 50vw;
+    cursor: pointer;
+    transform-origin: bottom left;
+    transform: scale(var(--ui-scale));
+}
+
+.bottom-left:active {
+    transform: scale(calc(var(--ui-scale) * 0.95));
+    background: rgba(255, 255, 255, 0.1);
+}
+
+#hitokoto-text {
+    font-size: 0.9rem;
+    line-height: 1.4;
+    display: block;
+}
+
+#hitokoto-author {
+    display: block;
+    margin-top: 5px;
+    font-size: 0.75rem;
+    color: #c8d6e5;
+    text-align: right;
+}
+
+.bottom-right {
+    bottom: 15px;
+    right: 15px;
+    width: 40vw; /* 略微增加宽度以适应并列布局 */
+    min-width: 200px;
+    max-width: 320px;
+    transform-origin: bottom right;
+    transform: scale(var(--ui-scale));
+}
+
+#course-module {
+    cursor: pointer;
+    transition: opacity 0.2s;
+}
+
+.course-group-label {
+    font-size: 0.75rem;
+    color: #a1c4fd;
+    margin-bottom: 10px;
+    display: block;
+    text-align: left;
+    font-weight: bold;
+    letter-spacing: 1px;
+}
+
+.course-parallel-container {
+    display: flex;
+    align-items: flex-start; /* 改为顶部对齐，防止换行时错位 */
+    gap: 12px;
+}
+
+.course-item {
+    flex: 1;
+    min-width: 0;
+    text-align: left;
+}
+
+.course-v-divider {
+    width: 1px;
+    background: rgba(255, 255, 255, 0.15);
+    align-self: stretch; /* 分隔线依然拉满高度 */
+    flex-shrink: 0;
+}
+
+.course-name-row {
+    font-size: 1.1rem; /* 放大课程名 */
+    color: #ffeb3b;
+    white-space: normal;
+    word-break: break-word;
+    font-weight: bold;
+    display: block;
+    line-height: 1.2;
+    margin-bottom: 6px;
+}
+
+.course-time-row {
+    font-size: 0.8rem; /* 放大时间 */
+    color: #fff;
+    opacity: 0.9;
+    display: block;
+    margin-bottom: 4px;
+    font-family: inherit; /* 统一字体 */
+}
+
+.course-loc-row {
+    font-size: 0.8rem; /* 放大地点，与时间一致 */
+    color: #a1c4fd;
+    opacity: 0.85;
+    display: block;
+    white-space: normal;
+    word-break: break-all;
+    line-height: 1.3;
+}
+
+.divider {
+    border: none;
+    border-top: 1px dashed rgba(255, 255, 255, 0.2);
+    margin: 8px 0;
+}
+
+.progress-label {
+    font-size: 0.75rem;
+    margin-bottom: 5px;
+    display: flex;
+    justify-content: space-between;
+}
+
+.progress-bar {
+    width: 100%;
+    height: 5px;
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 3px;
+    overflow: hidden;
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, #a1c4fd 0%, #c2e9fb 100%);
+    width: 0%;
+    transition: width 1s ease;
+    box-shadow: 0 0 8px rgba(161, 196, 253, 0.6);
+}
+
+/* ====== 弹出面板通用样式 ====== */
+.modal-panel {
+    display: none;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 100;
+    text-align: center;
+    width: 85vw;
+    max-width: 340px;
+    background: rgba(255, 255, 255, 0.08);
+    backdrop-filter: blur(30px);
+    -webkit-backdrop-filter: blur(30px);
+    padding: 25px;
+    border-radius: 24px;
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    position: absolute;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.4);
+}
+
+.modal-panel h3 {
+    margin: 0 0 15px 0;
+    font-size: 1.1rem;
+    color: #81ecec;
+}
+
+.close-btn {
+    background: rgba(255, 255, 255, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.4);
+    color: white;
+    padding: 6px 20px;
+    border-radius: 8px;
+    font-family: inherit;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: background 0.2s;
+    margin-top: 15px;
+}
+
+.close-btn:active { background: rgba(255, 255, 255, 0.4); }
+
+/* 缩放面板特有 */
+#settings-panel p {
+    font-size: 0.9rem;
+    margin-bottom: 15px;
+    color: #c8d6e5;
+}
+
+input[type=range] {
+    width: 100%;
+    margin-bottom: 20px;
+    accent-color: #a1c4fd;
+}
+
+/* 定位面板特有 */
+.loc-input-group {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 15px;
+}
+
+#loc-input {
+    flex: 1;
+    padding: 8px;
+    border-radius: 8px;
+    border: none;
+    outline: none;
+    background: rgba(255, 255, 255, 0.9);
+    font-family: inherit;
+}
+
+#loc-search-btn {
+    padding: 8px 15px;
+    border-radius: 8px;
+    border: none;
+    background: #a1c4fd;
+    color: #000;
+    font-family: inherit;
+    cursor: pointer;
+    font-weight: bold;
+}
+
+#loc-results {
+    max-height: 160px;
+    overflow-y: auto;
+    text-align: left;
+}
+
+.loc-item {
+    padding: 10px 8px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    cursor: pointer;
+    font-size: 0.85rem;
+    color: #c8d6e5;
+}
+
+.loc-item:active { background: rgba(255, 255, 255, 0.2); }
+
+.loc-item-sub {
+    display: block;
+    font-size: 0.7rem;
+    color: #888;
+    margin-top: 2px;
+}
+
+@media (max-width: 600px) {
+    .widget {
+        padding: 10px 14px;
+        border-radius: 12px;
+    }
+    #time { font-size: 2.2rem; }
+}
