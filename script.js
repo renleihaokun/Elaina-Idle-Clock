@@ -1,5 +1,5 @@
 /**
- * 伊蕾娜の魔法手账 - 核心逻辑 (稳定并列版)
+ * 伊蕾娜の魔法手账 - 核心逻辑 (稳定版)
  */
 
 // ================= 配置与常量 =================
@@ -162,11 +162,13 @@ function updateWeatherUI(current, locName) {
     if (advEl) advEl.textContent = `* ${advice}`;
 }
 
-// ================= 课表处理 (并列分组逻辑) =================
+// ================= 课表处理 (侧边分组布局 - 纵向贯穿版) =================
 function updateCourseDisplay() {
     const stored = localStorage.getItem('elaina_courses');
-    const module = document.getElementById('course-module');
-    if (!stored || !module) return;
+    const labelEl = document.getElementById('course-label');
+    const itemsContainer = document.getElementById('course-items-container');
+    
+    if (!stored || !labelEl || !itemsContainer) return;
     
     const now = new Date();
     const nowTime = now.getTime();
@@ -175,10 +177,12 @@ function updateCourseDisplay() {
         .sort((a, b) => a.start - b.start);
 
     if (allFutureCourses.length === 0) {
-        module.innerHTML = `<span id="course-title">✨ 近期无课</span><span id="course-info">享受自由时光吧</span>`;
+        labelEl.textContent = "自由";
+        itemsContainer.innerHTML = `<span id="course-title">✨ 近期无课</span>`;
         return;
     }
 
+    // 1. 获取基准时段
     const baseCourse = allFutureCourses[0];
     const baseDate = new Date(baseCourse.start);
     
@@ -202,14 +206,17 @@ function updateCourseDisplay() {
     const baseDay = getDayLabel(baseDate);
     const baseDateStr = baseDate.toDateString();
 
+    // 更新左侧纵向标签
+    labelEl.textContent = `${baseDay}·${basePeriod}`;
+
+    // 2. 筛选同时段课程
     const focusCourses = allFutureCourses.filter(c => {
         const d = new Date(c.start);
         return d.toDateString() === baseDateStr && getPeriodLabel(d.getHours()) === basePeriod;
     }).slice(0, 2);
 
-    let html = `<span class="course-group-label">[${baseDay}·${basePeriod}]</span>`;
-    html += `<div class="course-parallel-container">`;
-    
+    // 3. 构造课程项 HTML
+    let html = '';
     focusCourses.forEach((c, index) => {
         const sd = new Date(c.start), ed = new Date(c.end);
         const fmt = (d) => String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
@@ -232,8 +239,7 @@ function updateCourseDisplay() {
         `;
     });
     
-    html += `</div>`;
-    module.innerHTML = html;
+    itemsContainer.innerHTML = html;
 }
 
 // ================= 特效与交互 =================

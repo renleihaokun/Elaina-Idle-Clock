@@ -52,17 +52,23 @@
         </section>
 
         <!-- 右下：课表与进度 -->
-        <section class="widget bottom-right">
-            <div id="course-module" onclick="document.getElementById('ics-upload').click()">
-                <span id="course-title">📅 点击导入课表(.ics)</span>
-                <span id="course-info">支持 WakeUp 导出文件</span>
-            </div>
-            <hr class="divider">
-            <div class="progress-label">
-                <span>今日进度</span><span id="progress-text">0%</span>
-            </div>
-            <div class="progress-bar">
-                <div id="progress-fill" class="progress-fill"></div>
+        <section class="widget bottom-right course-side-layout" onclick="document.getElementById('ics-upload').click()">
+            <!-- 左侧：纵向贯穿的标签 -->
+            <span id="course-label" class="course-group-label">加载中</span>
+            <!-- 中间：纵向分割线 -->
+            <div class="course-main-divider"></div>
+            <!-- 右侧：内容堆叠区 -->
+            <div class="course-content-stack">
+                <div id="course-items-container" class="course-parallel-container">
+                    <span id="course-title">📅 点击导入课表(.ics)</span>
+                </div>
+                <hr class="divider" style="margin: 8px 0;">
+                <div class="progress-label">
+                    <span>今日进度</span><span id="progress-text">0%</span>
+                </div>
+                <div class="progress-bar">
+                    <div id="progress-fill" class="progress-fill"></div>
+                </div>
             </div>
         </section>
     </main>

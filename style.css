@@ -230,75 +230,102 @@ body, html {
 .bottom-right {
     bottom: 15px;
     right: 15px;
-    width: 40vw; /* 略微增加宽度以适应并列布局 */
-    min-width: 200px;
-    max-width: 320px;
+    width: fit-content; /* 宽度由内容决定 */
+    min-width: 160px;
+    max-width: 80vw; /* 防止极端情况下超出屏幕 */
     transform-origin: bottom right;
     transform: scale(var(--ui-scale));
 }
 
-#course-module {
-    cursor: pointer;
-    transition: opacity 0.2s;
+.course-side-layout {
+    display: flex;
+    align-items: stretch;
+    gap: 6px; /* 压缩侧边间距 */
+    width: fit-content;
+}
+
+.course-content-stack {
+    display: flex;
+    flex-direction: column;
+    justify-content: center; /* 内容垂直居中 */
+    flex: 1;
+    min-width: 0;
 }
 
 .course-group-label {
-    font-size: 0.75rem;
+    writing-mode: vertical-lr;
+    text-orientation: upright;
+    font-size: 0.85rem; /* 放大字号 */
     color: #a1c4fd;
-    margin-bottom: 10px;
-    display: block;
-    text-align: left;
+    text-align: center;
     font-weight: bold;
     letter-spacing: 1px;
+    opacity: 0.9;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: auto;
+    line-height: 1;
+    padding: 0;
+    flex-shrink: 0;
+}
+
+.course-main-divider {
+    width: 0;
+    border-left: 1px dashed rgba(255, 255, 255, 0.12);
+    margin: 1px 0; /* 压缩分割线边距 */
+    flex-shrink: 0;
 }
 
 .course-parallel-container {
     display: flex;
-    align-items: flex-start; /* 改为顶部对齐，防止换行时错位 */
-    gap: 12px;
+    align-items: flex-start;
+    gap: 8px; /* 压缩并列间距 */
 }
 
 .course-item {
-    flex: 1;
+    flex: 0 0 auto;
     min-width: 0;
     text-align: left;
 }
 
 .course-v-divider {
     width: 1px;
-    background: rgba(255, 255, 255, 0.15);
-    align-self: stretch; /* 分隔线依然拉满高度 */
+    background: rgba(255, 255, 255, 0.1);
+    align-self: stretch;
     flex-shrink: 0;
 }
 
 .course-name-row {
-    font-size: 1.1rem; /* 放大课程名 */
+    font-size: 0.9rem;
     color: #ffeb3b;
-    white-space: normal;
-    word-break: break-word;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
     font-weight: bold;
     display: block;
-    line-height: 1.2;
-    margin-bottom: 6px;
+    line-height: 1; /* 极窄行高 */
+    margin-bottom: 2px;
 }
 
 .course-time-row {
-    font-size: 0.8rem; /* 放大时间 */
+    font-size: 0.65rem;
     color: #fff;
-    opacity: 0.9;
+    opacity: 0.8;
     display: block;
-    margin-bottom: 4px;
-    font-family: inherit; /* 统一字体 */
+    margin-bottom: 0px; /* 移除间距 */
+    font-family: inherit;
+    line-height: 1.1;
 }
 
 .course-loc-row {
-    font-size: 0.8rem; /* 放大地点，与时间一致 */
+    font-size: 0.65rem;
     color: #a1c4fd;
-    opacity: 0.85;
+    opacity: 0.75;
     display: block;
     white-space: normal;
     word-break: break-all;
-    line-height: 1.3;
+    line-height: 1.1;
 }
 
 .divider {
