@@ -209,10 +209,18 @@ function updateCourseDisplay() {
     // 更新左侧纵向标签
     labelEl.textContent = `${baseDay}·${basePeriod}`;
 
-    // 2. 筛选同时段课程
+    // 2. 筛选同时段课程并进行去重处理
+    const seenFocus = new Set();
     const focusCourses = allFutureCourses.filter(c => {
         const d = new Date(c.start);
-        return d.toDateString() === baseDateStr && getPeriodLabel(d.getHours()) === basePeriod;
+        const isSamePeriod = d.toDateString() === baseDateStr && getPeriodLabel(d.getHours()) === basePeriod;
+        if (!isSamePeriod) return false;
+        
+        // 使用标题、时间、地点作为唯一标识进行去重
+        const key = `${c.title}-${c.start}-${c.end}-${c.location}`;
+        if (seenFocus.has(key)) return false;
+        seenFocus.add(key);
+        return true;
     }).slice(0, 2);
 
     // 3. 构造课程项 HTML
