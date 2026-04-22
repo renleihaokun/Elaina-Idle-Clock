@@ -434,36 +434,67 @@ function handleIcsUpload(e) {
 function parseIcs(data) {
     const events = [], lines = data.split(/\r?\n/);
     let curr = null;
-    const parseICSTime = (s) => new Date(s.substring(0,4), s.substring(4,6)-1, s.substring(6,8), s.substring(9,11), s.substring(11,13), s.substring(13,15)).getTime();
+
+    const parseICSTime = (s) => {
+        if (!s || s.length < 8) return 0;
+        const y = parseInt(s.substring(0, 4)), m = parseInt(s.substring(4, 6)) - 1, d = parseInt(s.substring(6, 8));
+        if (s.length >= 15 && s.includes('T')) {
+            const h = parseInt(s.substring(9, 11)), min = parseInt(s.substring(11, 13)), sec = parseInt(s.substring(13, 15));
+            return s.endsWith('Z') ? Date.UTC(y, m, d, h, min, sec) : new Date(y, m, d, h, min, sec).getTime();
+        }
+        return new Date(y, m, d).getTime();
+    };
+
     for (let i = 0; i < lines.length; i++) {
         let line = lines[i];
         while (i + 1 < lines.length && (lines[i+1].startsWith(' ') || lines[i+1].startsWith('\t'))) {
             line += lines[i+1].substring(1); i++;
         }
-        if (line.startsWith('BEGIN:VEVENT')) curr = {};
+
+        if (line.startsWith('BEGIN:VEVENT')) curr = { exdates: [] };
         else if (line.startsWith('END:VEVENT')) {
             if (curr && curr.start) {
                 if (curr.rrule) {
                     let cs = new Date(curr.start), ce = new Date(curr.end), r = curr.rrule;
-                    let interval = r.match(/INTERVAL=(\d+)/) ? parseInt(RegExp.$1) : 1;
-                    let count = r.match(/COUNT=(\d+)/) ? parseInt(RegExp.$1) : 30;
-                    for (let j = 0; j < count; j++) {
-                        events.push({ title: curr.title, location: curr.location, start: cs.getTime(), end: ce.getTime() });
-                        cs.setDate(cs.getDate() + 7 * interval); ce.setDate(ce.getDate() + 7 * interval);
+                    let interval = (r.match(/INTERVAL=(\d+)/) || [0, 1])[1] * 1;
+                    let count = (r.match(/COUNT=(\d+)/) || [0, 0])[1] * 1;
+                    let untilMatch = r.match(/UNTIL=(\d{8}(T\d{6}Z?)?)/);
+                    let until = untilMatch ? parseICSTime(untilMatch[1]) : Infinity;
+
+                    if (count === 0 && until === Infinity) count = 30;
+
+                    for (let j = 0; (count > 0 ? j < count : true); j++) {
+                        if (cs.getTime() > until || j > 100) break;
+                        if (!curr.exdates.includes(cs.getTime())) {
+                            events.push({ 
+                                title: curr.title, 
+                                location: curr.location, 
+                                start: cs.getTime(), 
+                                end: ce.getTime() 
+                            });
+                        }
+                        cs.setDate(cs.getDate() + 7 * interval); 
+                        ce.setDate(ce.getDate() + 7 * interval);
                     }
-                } else events.push(curr);
+                } else {
+                    events.push({ title: curr.title, location: curr.location, start: curr.start, end: curr.end });
+                }
             }
             curr = null;
         } else if (curr) {
-            if (line.startsWith('SUMMARY:')) curr.title = line.substring(8).trim();
-            else if (line.startsWith('LOCATION:')) curr.location = line.substring(9).trim();
+            if (line.startsWith('SUMMARY')) curr.title = line.substring(line.indexOf(':') + 1).trim();
+            else if (line.startsWith('LOCATION')) curr.location = line.substring(line.indexOf(':') + 1).trim();
             else if (line.startsWith('DTSTART')) {
-                const m = line.match(/:(\d{8}T\d{6}Z?)/);
+                const m = line.match(/:(\d{8}(T\d{6}Z?)?)/);
                 if (m) curr.start = parseICSTime(m[1]);
             } else if (line.startsWith('DTEND')) {
-                const m = line.match(/:(\d{8}T\d{6}Z?)/);
+                const m = line.match(/:(\d{8}(T\d{6}Z?)?)/);
                 if (m) curr.end = parseICSTime(m[1]);
             } else if (line.startsWith('RRULE:')) curr.rrule = line.substring(6).trim();
+            else if (line.startsWith('EXDATE')) {
+                const m = line.match(/:([\d{8}T\d{6}Z?,?]+)/);
+                if (m) m[1].split(',').forEach(s => curr.exdates.push(parseICSTime(s)));
+            }
         }
     }
     return events;
