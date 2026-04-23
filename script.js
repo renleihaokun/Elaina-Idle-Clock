@@ -17,6 +17,7 @@ let state = {
     currentScale: 1.0,
     isPressing: false,
     pressTimer: null,
+    coursePressTimer: null, 
     shakeCooldown: false,
     lastShake: { x: 0, y: 0, z: 0 },
     weatherRetryCount: 0, 
@@ -206,9 +207,6 @@ function updateCourseDisplay() {
     const baseDay = getDayLabel(baseDate);
     const baseDateStr = baseDate.toDateString();
 
-    // 更新左侧纵向标签
-    labelEl.textContent = `${baseDay}·${basePeriod}`;
-
     // 2. 筛选同时段课程并进行去重处理
     const seenFocus = new Set();
     const focusCourses = allFutureCourses.filter(c => {
@@ -223,18 +221,33 @@ function updateCourseDisplay() {
         return true;
     }).slice(0, 2);
 
-    // 3. 构造课程项 HTML
+    // 3. 构造课程项 HTML 并确定当前状态
     let html = '';
+    let currentStatus = null; // 用于实时更新左侧标签
+
     focusCourses.forEach((c, index) => {
         const sd = new Date(c.start), ed = new Date(c.end);
         const fmt = (d) => String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
         const isNow = (nowTime >= c.start && nowTime <= c.end);
         
+        if (isNow) {
+            currentStatus = c.skipped ? "翘课中" : "上课中";
+        }
+
         if (index > 0) html += `<div class="course-v-divider"></div>`;
 
+        // 仅在正在进行的课程上绑定长按事件
+        const pressEvents = isNow ? `
+            onmousedown="startCoursePress(event, '${c.title}', ${c.start}, ${c.end})"
+            ontouchstart="startCoursePress(event, '${c.title}', ${c.start}, ${c.end})"
+            onmouseup="cancelCoursePress()"
+            onmouseleave="cancelCoursePress()"
+            ontouchend="cancelCoursePress()"
+        ` : '';
+
         html += `
-            <div class="course-item">
-                <span class="course-name-row" style="${isNow ? 'color: #ff9a9e;' : ''}">
+            <div class="course-item ${c.skipped ? 'skipped' : ''}" ${pressEvents}>
+                <span class="course-name-row" style="${(isNow && !c.skipped) ? 'color: #ff9a9e;' : ''}">
                     ${c.title}
                 </span>
                 <span class="course-time-row">
@@ -247,7 +260,61 @@ function updateCourseDisplay() {
         `;
     });
     
+    // 更新左侧纵向标签：优先显示实时状态
+    labelEl.textContent = currentStatus || `${baseDay}·${basePeriod}`;
     itemsContainer.innerHTML = html;
+}
+
+function toggleSkipCourse(title, start, end) {
+    const stored = localStorage.getItem('elaina_courses');
+    if (!stored) return;
+    
+    let courses = JSON.parse(stored);
+    let found = false;
+    let isSkipping = false;
+
+    courses = courses.map(c => {
+        if (c.title === title && c.start === start && c.end === end) {
+            c.skipped = !c.skipped;
+            found = true;
+            isSkipping = c.skipped;
+        }
+        return c;
+    });
+
+    if (found) {
+        localStorage.setItem('elaina_courses', JSON.stringify(courses));
+        updateCourseDisplay();
+        
+        const txt = document.getElementById('hitokoto-text');
+        if (txt) {
+            if (isSkipping) {
+                const skipQuotes = [
+                    "「诶？这节课要翘掉吗？真是个不爱学习的坏学生呢。」",
+                    "「逃课去休息？虽然我不讨厌追求自由的人，但知识也是魔法的基础哦。」",
+                    "「既然你这么想休息，那就把变聪明的机会留给我这位天才魔女好了。」",
+                    "「敢在我的注视下翘课，你的胆量倒是值得称赞呢，呵呵。」",
+                    "「不想去上课？那就把自己关在房间里写日记吧，就像我那样。」",
+                    "「虽然翘课很刺激，但如果因此变成笨蛋，我可不会承认认识你哦。」",
+                    "「在这种地方偷懒，难道是在等哪位美丽的魔女带你去旅行吗？」"
+                ];
+                txt.innerText = skipQuotes[Math.floor(Math.random() * skipQuotes.length)];
+            } else {
+                txt.innerText = "「哦？打算回去上课了吗？这种迷途知返的行为倒也不坏。」";
+            }
+        }
+    }
+}
+
+function startCoursePress(e, title, start, end) {
+    e.stopPropagation(); // 防止触发背景的魔法爆发
+    state.coursePressTimer = setTimeout(() => {
+        toggleSkipCourse(title, start, end);
+    }, 800);
+}
+
+function cancelCoursePress() {
+    clearTimeout(state.coursePressTimer);
 }
 
 // ================= 特效与交互 =================

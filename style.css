@@ -328,6 +328,18 @@ body, html {
     line-height: 1.1;
 }
 
+/* 翘课状态样式 */
+.course-item.skipped .course-name-row {
+    text-decoration: line-through;
+    color: #ffeb3b !important;
+    opacity: 1;
+}
+
+.course-item.skipped .course-time-row,
+.course-item.skipped .course-loc-row {
+    opacity: 0.8;
+}
+
 .divider {
     border: none;
     border-top: 1px dashed rgba(255, 255, 255, 0.2);
