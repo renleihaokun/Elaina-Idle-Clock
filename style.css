@@ -258,14 +258,15 @@ body, html {
 }
 
 #danmaku-iframe {
-    /* 1 / 0.7 = 1.42857... */
-    width: 142.86%; 
-    height: 142.86%;
-    transform: scale(0.7);
+    /* 动态计算内部缩放：确保在 1.5 全局缩放时等于 0.7 (0.466 * 1.5 ≈ 0.7) */
+    --internal-scale: calc(0.466 * var(--ui-scale));
+    width: calc(100% / var(--internal-scale)); 
+    height: calc(100% / var(--internal-scale));
+    transform: scale(var(--internal-scale));
     transform-origin: top left;
     border: none;
     display: block;
-    opacity: 0.7; /* 恢复为 50% 透明度 */
+    opacity: 0.5;
 }
 
 .course-side-layout {
