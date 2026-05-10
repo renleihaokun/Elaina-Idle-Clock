@@ -237,38 +237,6 @@ body, html {
     transform: scale(var(--ui-scale));
 }
 
-.danmaku-container {
-    position: absolute;
-    right: 15px;
-    /* 寻找平衡点：Top 80px, Bottom 115px */
-    top: calc(15px + 80px * var(--ui-scale));
-    bottom: calc(15px + 115px * var(--ui-scale));
-    width: calc(160px * var(--ui-scale));
-    padding: 0;
-    overflow: hidden;
-    /* 移除背景卡片视觉效果 */
-    background: none;
-    border: none;
-    box-shadow: none;
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-    z-index: 9;
-    transform: none;
-    display: block;
-}
-
-#danmaku-iframe {
-    /* 动态计算内部缩放：确保在 1.5 全局缩放时等于 0.7 (0.466 * 1.5 ≈ 0.7) */
-    --internal-scale: calc(0.466 * var(--ui-scale));
-    width: calc(100% / var(--internal-scale)); 
-    height: calc(100% / var(--internal-scale));
-    transform: scale(var(--internal-scale));
-    transform-origin: top left;
-    border: none;
-    display: block;
-    opacity: 0.7;
-}
-
 .course-side-layout {
     display: flex;
     align-items: stretch;
