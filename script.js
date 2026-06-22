@@ -54,10 +54,18 @@ function setupUI() {
     } else {
         state.currentScale = parseFloat(savedScale);
     }
-    
+
     updateUIScale(state.currentScale);
     const slider = document.getElementById('scale-slider');
     if (slider) slider.value = state.currentScale;
+
+    // 填充巴法云配置输入框
+    var bemfaUid = localStorage.getItem('elaina_bemfa_uid');
+    var bemfaTopic = localStorage.getItem('elaina_bemfa_topic');
+    var uidEl = document.getElementById('bemfa-uid');
+    var topicEl = document.getElementById('bemfa-topic');
+    if (uidEl && bemfaUid) uidEl.value = bemfaUid;
+    if (topicEl && bemfaTopic) topicEl.value = bemfaTopic;
 }
 
 function updateUIScale(val) {

@@ -423,6 +423,21 @@ input[type=range] {
     accent-color: #a1c4fd;
 }
 
+/* 巴法云配置输入框 */
+#bemfa-uid,
+#bemfa-topic {
+    width: 100%;
+    padding: 8px;
+    border-radius: 8px;
+    border: none;
+    outline: none;
+    background: rgba(255, 255, 255, 0.9);
+    font-family: inherit;
+    font-size: 0.85rem;
+    margin-bottom: 8px;
+    box-sizing: border-box;
+}
+
 /* 定位面板特有 */
 .loc-input-group {
     display: flex;
@@ -480,4 +495,18 @@ input[type=range] {
         border-radius: 12px;
     }
     #time { font-size: 2.2rem; }
+}
+
+/* ====== 巴法云亮度遮罩层 ====== */
+#bemfa-mask {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background: #000;
+    opacity: 0;
+    pointer-events: none;
+    z-index: 99999;
+    transition: opacity 2s ease;
 }
