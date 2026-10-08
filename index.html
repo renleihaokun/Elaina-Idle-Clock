@@ -20,7 +20,8 @@
     <div id="magic-flash"></div>
     <div id="bg1" class="bg-layer"></div>
     <div id="bg2" class="bg-layer"></div>
-    <div id="particle-container"></div>
+    <canvas id="fx-canvas" aria-hidden="true"></canvas>
+    <div id="fx-vignette" aria-hidden="true"></div>
 
     <!-- 巴法云亮度遮罩层 -->
     <div id="bemfa-mask"></div>
@@ -83,6 +84,8 @@
             <h3 style="color: #ffeb3b;">⚙️ 魔法手账设置</h3>
             <p>组件缩放比例: <span id="scale-value">100%</span></p>
             <input type="range" id="scale-slider" min="0.5" max="1.5" step="0.05" value="1">
+            <p>环境特效强度: <span id="fx-level-value">标准</span></p>
+            <input type="range" id="fx-level-slider" min="0" max="3" step="1" value="2" title="老手机若发热或掉帧，可调低档位">
             <button class="close-btn" style="width:100%; margin-bottom: 10px; background: rgba(129, 236, 236, 0.2); border-color: rgba(129, 236, 236, 0.4);" onclick="toggleFullScreen()">🖥️ 切换全屏模式</button>
             <hr class="divider">
             <h3>💡 巴法云远程亮度</h3>
@@ -113,6 +116,7 @@
     <script src="bemfa.js" defer></script>
 
     <!-- 核心逻辑 -->
+    <script src="effects.js" defer></script>
     <script src="script.js" defer></script>
 </body>
 </html>

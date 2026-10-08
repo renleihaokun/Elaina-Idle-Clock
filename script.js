@@ -7,25 +7,34 @@ const CONFIG = {
     API_URL: 'https://elaina.haokun.me',
     BG_SWITCH_MINUTES: 5,
     WEATHER_UPDATE_MINUTES: 30,
-    QUOTE_UPDATE_MINUTES: 10,
-    PARTICLE_INTERVAL_MS: 400
+    QUOTE_UPDATE_MINUTES: 10
 };
+
+// 环境特效档位：索引即设置面板滑块的取值
+const FX_LEVELS = ['off', 'light', 'normal', 'rich'];
 
 let state = {
     currentWeatherType: 'sakura',
+    isThunder: false,
     activeBg: 1,
     currentScale: 1.0,
     isPressing: false,
     pressTimer: null,
+    pressStart: null,        // { x, y, t, onBackground }：区分短按星芒与长按爆发
     coursePressTimer: null, 
     shakeCooldown: false,
     lastShake: { x: 0, y: 0, z: 0 },
+    lastTouchTs: 0,
     weatherRetryCount: 0, 
-    weatherTimer: null    
+    weatherTimer: null,
+    bgToneTimer: null,
+    lastPulseHour: -1,       // 整点脉冲去重
+    thunderTimer: null
 };
 
 // ================= 初始化 =================
 function init() {
+    startFX();
     setupUI();
     setupEventListeners();
     
@@ -42,8 +51,19 @@ function init() {
     updateCourseDisplay();
     
     fetchWeather();
-    
-    setInterval(createParticle, CONFIG.PARTICLE_INTERVAL_MS);
+}
+
+// ================= 特效接线 =================
+// effects.js 未加载（或被浏览器拦截）时全部退化为无操作，不影响时钟本体
+function fx() {
+    return (typeof window.ElainaFX !== 'undefined' && window.ElainaFX) ? window.ElainaFX : null;
+}
+
+function startFX() {
+    const api = fx();
+    if (!api) return;
+    api.start();
+    api.setWeather(state.currentWeatherType, { thunder: state.isThunder });
 }
 
 // ================= UI 控制 =================
@@ -59,6 +79,16 @@ function setupUI() {
     const slider = document.getElementById('scale-slider');
     if (slider) slider.value = state.currentScale;
 
+    // 环境特效档位：持久化交给 effects.js，这里同步 UI
+    const fxSlider = document.getElementById('fx-level-slider');
+    if (fxSlider) {
+        const api = fx();
+        const saved = api ? api.getLevel() : (localStorage.getItem('elaina_fx_level') || 'normal');
+        const idx = Math.max(0, FX_LEVELS.indexOf(saved));
+        fxSlider.value = idx;
+        updateFxLevelLabel(idx);
+    }
+
     // 填充巴法云配置输入框
     var bemfaUid = localStorage.getItem('elaina_bemfa_uid');
     var bemfaTopic = localStorage.getItem('elaina_bemfa_topic');
@@ -73,6 +103,25 @@ function updateUIScale(val) {
     const valEl = document.getElementById('scale-value');
     if (valEl) valEl.innerText = Math.round(val * 100) + '%';
     localStorage.setItem('elaina_ui_scale', val);
+}
+
+function updateFxLevelLabel(idx) {
+    const el = document.getElementById('fx-level-value');
+    if (!el) return;
+    const api = fx();
+    const fallback = { off: '关闭', light: '轻盈', normal: '标准', rich: '华丽' };
+    el.textContent = api ? api.levelLabel(FX_LEVELS[idx]) : (fallback[FX_LEVELS[idx]] || '标准');
+}
+
+function applyFxLevel(idx) {
+    const level = FX_LEVELS[idx] || 'normal';
+    const api = fx();
+    if (api) {
+        api.setLevel(level);
+    } else {
+        try { localStorage.setItem('elaina_fx_level', level); } catch (e) { /* 忽略 */ }
+    }
+    updateFxLevelLabel(idx);
 }
 
 function togglePanel(panelId) {
@@ -144,23 +193,35 @@ function updateWeatherUI(current, locName) {
     const temp = current.temperature_2m;
     const feelsLike = current.apparent_temperature;
     const humidity = current.relative_humidity_2m;
+    const hour = new Date().getHours();
+    const isNight = hour >= 19 || hour < 6;
     
     let icon = '☁️', text = '多云', advice = '是个适合旅行的好天气。';
     state.currentWeatherType = 'sakura'; 
+    state.isThunder = false;
 
-    if (code === 0) { icon = '☀️'; text = '晴朗'; }
+    if (code === 0) {
+        icon = '☀️'; text = '晴朗';
+        state.currentWeatherType = isNight ? 'star' : 'sakura';
+    }
     else if (code >= 1 && code <= 3) { icon = '⛅'; text = '多云'; }
-    else if (code >= 45 && code <= 48) { icon = '🌫️'; text = '雾'; }
+    else if (code >= 45 && code <= 48) {
+        icon = '🌫️'; text = '雾'; state.currentWeatherType = 'fog';
+    }
     else if ((code >= 51 && code <= 67) || (code >= 80 && code <= 82)) { 
         icon = '🌧️'; text = '降雨'; state.currentWeatherType = 'rain'; 
     }
     else if ((code >= 71 && code <= 77) || code === 85 || code === 86) { 
         icon = '❄️'; text = '降雪'; state.currentWeatherType = 'snow'; 
     }
-    else if (code >= 95) { icon = '⛈️'; text = '雷阵雨'; state.currentWeatherType = 'rain'; }
+    else if (code >= 95) {
+        icon = '⛈️'; text = '雷阵雨'; state.currentWeatherType = 'rain'; state.isThunder = true;
+    }
 
     if (state.currentWeatherType === 'rain') advice = '下雨了，带好伞保护魔法书。';
     else if (state.currentWeatherType === 'snow') advice = '下雪了，气温骤降注意保暖。';
+    else if (state.currentWeatherType === 'fog') advice = '雾气很重，出门当心迷路。';
+    else if (isNight && code === 0) advice = '星星很亮，是个适合旅行的夜晚。';
     else if (temp > 30) advice = '阳光刺眼，注意防暑防晒。';
 
     const mainEl = document.getElementById('weather-main');
@@ -169,6 +230,10 @@ function updateWeatherUI(current, locName) {
     if (mainEl) mainEl.textContent = `[${locName}] ${icon} ${text} ${temp}°C`;
     if (detEl) detEl.textContent = `体感 ${feelsLike}°C | 湿度 ${humidity}%`;
     if (advEl) advEl.textContent = `* ${advice}`;
+
+    const api = fx();
+    if (api) api.setWeather(state.currentWeatherType, { thunder: state.isThunder });
+    scheduleThunder();
 }
 
 // ================= 课表处理 (侧边分组布局 - 纵向贯穿版) =================
@@ -293,6 +358,9 @@ function toggleSkipCourse(title, start, end) {
     if (found) {
         localStorage.setItem('elaina_courses', JSON.stringify(courses));
         updateCourseDisplay();
+
+        const api = fx();
+        if (api) api.puffAt(document.getElementById('course-items-container'));
         
         const txt = document.getElementById('hitokoto-text');
         if (txt) {
@@ -326,26 +394,24 @@ function cancelCoursePress() {
 }
 
 // ================= 特效与交互 =================
-function createParticle() {
-    const container = document.getElementById('particle-container');
-    const maxCount = state.currentWeatherType === 'rain' ? 30 : 15; 
-    if (!container || container.childElementCount > maxCount) return;
-    
-    const p = document.createElement('div');
-    p.className = `particle ${state.currentWeatherType}`;
-    p.style.left = `${Math.random() * 100}vw`;
-    const duration = state.currentWeatherType === 'rain' ? Math.random() * 1 + 1.5 : 
-                    state.currentWeatherType === 'snow' ? Math.random() * 5 + 8 : 
-                    Math.random() * 4 + 5;
-    
-    if (state.currentWeatherType === 'sakura') {
-        const size = Math.random() * 8 + 6;
-        p.style.width = p.style.height = `${size}px`;
-    }
-    p.style.animationDuration = `${duration}s`;
-    p.style.opacity = Math.random() * 0.5 + 0.3;
-    container.appendChild(p);
-    setTimeout(() => { if(p.parentNode) p.remove(); }, 9000);
+// 雷阵雨的低亮度闪屏：一次性动画，带冷却，不叠加
+function spawnThunder() {
+    const flash = document.getElementById('magic-flash');
+    if (!flash) return;
+    flash.classList.remove('thunder');
+    void flash.offsetWidth;              // 强制回流，保证连续两次闪都能重播
+    flash.classList.add('thunder');
+    clearTimeout(state.thunderTimer);
+    state.thunderTimer = setTimeout(() => flash.classList.remove('thunder'), 1200);
+}
+
+function scheduleThunder() {
+    if (!state.isThunder) return;
+    clearTimeout(state.thunderTimer);
+    state.thunderTimer = setTimeout(() => {
+        spawnThunder();
+        scheduleThunder();
+    }, Math.random() * 14000 + 6000);
 }
 
 function triggerMagicExplosion() {
@@ -353,6 +419,12 @@ function triggerMagicExplosion() {
     if (flash) {
         flash.style.opacity = '1'; 
         setTimeout(() => { flash.style.opacity = '0'; }, 600);
+    }
+    const api = fx();
+    if (api) {
+        // 长按位置优先，其次取屏幕中心
+        const pt = state.pressStart || { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+        api.burst(pt.x, pt.y);
     }
     const txt = document.getElementById('hitokoto-text');
     const aut = document.getElementById('hitokoto-author');
@@ -436,6 +508,13 @@ function updateTime() {
         progFE.style.width = `${progress}%`;
     }
     if (now.getSeconds() === 0) updateCourseDisplay();
+
+    // 整点：一圈星芒脉冲，给常驻画面一个时间刻度
+    if (now.getMinutes() === 0 && state.lastPulseHour !== now.getHours()) {
+        state.lastPulseHour = now.getHours();
+        const api = fx();
+        if (api) api.hourPulse();
+    }
 }
 
 function fetchWitchQuote() {
@@ -457,32 +536,70 @@ function fetchWitchQuote() {
     const authEl = document.getElementById('hitokoto-author');
     if (textEl) textEl.innerText = `「${quote.text}」`;
     if (authEl) authEl.innerText = `—— ${quote.author}`;
+
+    const api = fx();
+    if (api) api.puffAt(textEl);
 }
 
 function changeBackground() {
+    loadBackground(true);
+}
+
+// 加载并淡入新壁纸；allowCors 为真时顺带取平均亮度给粒子引擎调色
+// （服务端已返回 access-control-allow-origin: *，不会产生额外请求）
+function loadBackground(allowCors) {
     const imgUrl = `${CONFIG.API_URL}/?t=${Date.now()}`;
     const img = new Image();
+    if (allowCors) img.crossOrigin = 'anonymous';
+
+    img.onerror = () => {
+        // 万一 CORS 头失效会导致整张图加载失败，退化为普通加载
+        if (allowCors) loadBackground(false);
+    };
+
     img.onload = () => {
-        const bg1 = document.getElementById('bg1'), bg2 = document.getElementById('bg2');
-        if (!bg1 || !bg2) return;
-        if (state.activeBg === 1) {
-            bg2.style.backgroundImage = `url(${imgUrl})`;
-            bg2.style.opacity = 1; bg1.style.opacity = 0;
-            state.activeBg = 2;
-        } else {
-            bg1.style.backgroundImage = `url(${imgUrl})`;
-            bg1.style.opacity = 1; bg2.style.opacity = 0;
-            state.activeBg = 1;
-        }
+        // 先解码再换图，避免老手机在切换瞬间卡一下
+        const swap = () => {
+            const bg1 = document.getElementById('bg1'), bg2 = document.getElementById('bg2');
+            if (!bg1 || !bg2) return;
+            if (state.activeBg === 1) {
+                bg2.style.backgroundImage = `url(${imgUrl})`;
+                bg2.style.opacity = 1; bg1.style.opacity = 0;
+                state.activeBg = 2;
+            } else {
+                bg1.style.backgroundImage = `url(${imgUrl})`;
+                bg1.style.opacity = 1; bg2.style.opacity = 0;
+                state.activeBg = 1;
+            }
+            if (allowCors) sampleBgTone(img);
+        };
+        if (img.decode) { img.decode().then(swap, swap); } else { swap(); }
     };
     img.src = imgUrl;
+}
+
+// 8×8 缩略图估平均亮度：亮壁纸用描边更重的花瓣，暗壁纸用光晕更足的花瓣
+function sampleBgTone(img) {
+    try {
+        const c = document.createElement('canvas');
+        c.width = 8; c.height = 8;
+        const ctx = c.getContext('2d');
+        ctx.drawImage(img, 0, 0, 8, 8);
+        const d = ctx.getImageData(0, 0, 8, 8).data;
+        let sum = 0;
+        for (let i = 0; i < d.length; i += 4) sum += 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+        const api = fx();
+        if (api) api.setBackgroundTone(sum / (d.length / 4));
+    } catch (e) { /* 画布被污染时忽略，沿用默认色调 */ }
 }
 
 // ================= 事件监听 =================
 function setupEventListeners() {
     const slider = document.getElementById('scale-slider');
+    const fxSlider = document.getElementById('fx-level-slider');
     const ics = document.getElementById('ics-upload');
     if (slider) slider.addEventListener('input', e => updateUIScale(e.target.value));
+    if (fxSlider) fxSlider.addEventListener('input', e => applyFxLevel(parseInt(e.target.value, 10)));
     if (ics) ics.addEventListener('change', handleIcsUpload);
     window.addEventListener('mousedown', startPress);
     window.addEventListener('touchstart', startPress, { passive: true });
@@ -576,12 +693,41 @@ function parseIcs(data) {
 }
 
 function startPress(e) {
-    if (e.target.closest('.widget') || e.target.closest('.modal-panel')) return; 
+    // 触屏上 touchstart 之后浏览器还会补一次 mousedown，忽略它以免短按特效放两遍
+    if (e.type === 'mousedown' && Date.now() - state.lastTouchTs < 700) return;
+
+    let x = e.clientX, y = e.clientY;
+    if (e.touches && e.touches.length) {
+        state.lastTouchTs = Date.now();
+        x = e.touches[0].clientX;
+        y = e.touches[0].clientY;
+    }
+
+    const onBackground = !(e.target && e.target.closest &&
+        (e.target.closest('.widget') || e.target.closest('.modal-panel')));
+    state.pressStart = { x: x || 0, y: y || 0, t: Date.now(), onBackground, fired: false };
+    if (!onBackground) return;
+
     state.isPressing = true;
-    state.pressTimer = setTimeout(() => { if (state.isPressing) triggerMagicExplosion(); }, 1500);
+    state.pressTimer = setTimeout(() => {
+        if (state.isPressing && state.pressStart) {
+            state.pressStart.fired = true;
+            triggerMagicExplosion();
+        }
+    }, 1500);
 }
 
-function cancelPress() { state.isPressing = false; clearTimeout(state.pressTimer); }
+function cancelPress() {
+    const start = state.pressStart;
+    state.isPressing = false;
+    clearTimeout(state.pressTimer);
+    // 短按空白处：来一小撮星芒，让常驻页面有点回应
+    if (start && start.onBackground && !start.fired && Date.now() - start.t < 400) {
+        const api = fx();
+        if (api) api.sparkleAt(start.x, start.y);
+    }
+    state.pressStart = null;
+}
 
 function handleMotion(e) {
     const acc = e.accelerationIncludingGravity;
@@ -591,7 +737,8 @@ function handleMotion(e) {
         state.shakeCooldown = true;
         const txt = document.getElementById('hitokoto-text');
         if (txt) txt.innerText = "「遭遇不明气流！请不要随便摇晃别人的世界好吗？」";
-        document.querySelectorAll('.particle').forEach(p => p.classList.add('particle-windy'));
+        const api = fx();
+        if (api) api.wind();
         setTimeout(() => { state.shakeCooldown = false; fetchWitchQuote(); }, 5000);
     }
     state.lastShake = { x: acc.x, y: acc.y, z: acc.z };
