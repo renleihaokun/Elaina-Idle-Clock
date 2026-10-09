@@ -4,7 +4,8 @@
  * 使用场景：老手机横屏长期挂机。设计目标是「用尽可能低的每帧成本，换取尽可能丰富的氛围」。
  *
  * 关键手段：
- *   1. 单张 Canvas 层 + 启动时一次性烘焙的 sprite，运行期只做 drawImage / fillRect；
+ *   1. 单张 Canvas 层 + 启动时一次性烘焙的 2x 超采样 sprite（绘制时缩回 CSS 尺寸），
+ *      运行期只做 drawImage / fillRect；
  *   2. 热循环内不使用 shadowBlur、不新建渐变、不逐粒子 setTransform（旋转用烘焙好的旋转变体替代）；
  *   3. 自带帧率上限与自适应降级阶梯，持续超预算时自动减量，直到关掉最贵的特性；
  *   4. 页面不可见时完全停止 rAF，不空转省电。
@@ -22,7 +23,8 @@
 
     // ================= 常量 =================
     const CFG = {
-        DPR_CAP: 1.5,              // 老手机 DPR 常见 2~3，封顶以省填充率
+        DPR_CAP: 1.5,              // 省电档位封顶（老手机 DPR 常见 2~3）
+        DPR_CAP_RICH: 2,           // 华丽档放宽换清晰度；低内存设备仍强制回 1.5
         FPS_CAP: { off: 0, light: 20, normal: 30, rich: 30 },
         SCALE: { off: 0, light: 0.6, normal: 1, rich: 1.3 },
         MAX_DRAWABLES: 96,         // 常驻绘制对象硬上限
@@ -48,16 +50,16 @@
     // 天气预设：每组是一类粒子的数量与运动参数
     const PRESETS = {
         sakura: [
-            { kind: K_PETAL, size: 0, count: 16, vy: [18, 26], a: [0.34, 0.5], sway: [6, 14], spin: [0.15, 0.4] },
-            { kind: K_PETAL, size: 1, count: 12, vy: [30, 46], a: [0.52, 0.74], sway: [10, 22], spin: [0.35, 0.8] },
-            { kind: K_PETAL, size: 2, count: 4, vy: [52, 76], a: [0.76, 0.95], sway: [14, 30], spin: [0.5, 1.1] },
+            { kind: K_PETAL, size: 0, count: 16, vy: [18, 26], a: [0.45, 0.6], sway: [6, 14], spin: [0.15, 0.4] },
+            { kind: K_PETAL, size: 1, count: 12, vy: [30, 46], a: [0.62, 0.78], sway: [10, 22], spin: [0.35, 0.8] },
+            { kind: K_PETAL, size: 2, count: 4, vy: [52, 76], a: [0.8, 0.95], sway: [14, 30], spin: [0.5, 1.1] },
             { kind: K_MOTE, count: 8, vy: [-9, -3], dx: [-6, 6], a: [0.22, 0.45], scale: [0.5, 1.1] },
             { kind: K_GLINT, count: 5, dur: [1.1, 2.2], gap: [0.6, 3.2] }
         ],
         star: [
             { kind: K_STAR, count: 40, area: [0, 0.62], a: [0.22, 0.8] },
             { kind: K_MOTE, count: 8, vy: [-7, -2], dx: [-9, 9], a: [0.3, 0.6], scale: [0.6, 1.3], cool: true },
-            { kind: K_PETAL, size: 1, count: 8, vy: [20, 34], a: [0.34, 0.58], sway: [8, 18], spin: [0.2, 0.6] },
+            { kind: K_PETAL, size: 1, count: 8, vy: [20, 34], a: [0.55, 0.72], sway: [8, 18], spin: [0.2, 0.6] },
             { kind: K_GLINT, count: 4, dur: [1.0, 1.9], gap: [1.4, 3.6] }
         ],
         rain: [
@@ -65,14 +67,14 @@
             { kind: K_GLINT, count: 3, dur: [0.9, 1.6], gap: [2.0, 4.5] }
         ],
         snow: [
-            { kind: K_SNOW, size: 0, count: 20, vy: [24, 40], a: [0.35, 0.55], sway: [8, 18] },
-            { kind: K_SNOW, size: 1, count: 18, vy: [42, 64], a: [0.5, 0.75], sway: [10, 24] },
-            { kind: K_SNOW, size: 2, count: 7, vy: [66, 96], a: [0.7, 0.95], sway: [12, 28] },
+            { kind: K_SNOW, size: 0, count: 20, vy: [24, 40], a: [0.45, 0.6], sway: [8, 18] },
+            { kind: K_SNOW, size: 1, count: 18, vy: [42, 64], a: [0.62, 0.78], sway: [10, 24] },
+            { kind: K_SNOW, size: 2, count: 7, vy: [66, 96], a: [0.8, 0.95], sway: [12, 28] },
             { kind: K_GLINT, count: 3, dur: [0.9, 1.7], gap: [1.6, 3.8] }
         ],
         fog: [
             { kind: K_FOG, count: 6, size: [180, 260], dx: [-16, -5], y: [0.35, 1.0], a: [0.05, 0.12] },
-            { kind: K_PETAL, size: 1, count: 8, vy: [16, 26], a: [0.3, 0.5], sway: [8, 16], spin: [0.15, 0.4] },
+            { kind: K_PETAL, size: 1, count: 8, vy: [16, 26], a: [0.5, 0.66], sway: [8, 16], spin: [0.15, 0.4] },
             { kind: K_GLINT, count: 3, dur: [1.0, 1.8], gap: [1.8, 4.0] }
         ]
     };
@@ -99,6 +101,7 @@
         overMs: 0,
         okMs: 0,
         lastPulse: 0,
+        buildAt: 0,              // buildPreset 时间戳，用于 0.9s 全场淡入
         reduced: false
     };
 
@@ -113,67 +116,92 @@
     // ================= sprite 烘焙 =================
     // 所有形状在这里一次性画好，运行期只贴图，避免热循环里创建渐变 / 阴影 / 矩阵。
     const SPR = {
-        petal: [],               // [size].variants[]，暗色壁纸用（描边淡）
-        petalSoft: [],           // 亮色壁纸用（描边重，保证可辨）
+        petal: [],               // [size].variants[]，暗色壁纸用
+        petalSoft: [],           // 亮色壁纸用（加深本体 + 细描边）
         snow: [],
+        stars: [],               // 星点：柔光圆点两档
         glowWarm: null,
         glowCool: null,
         glint: null,
-        fog: null
+        fog: null,
+        rain: null,              // 渐变雨丝
+        wind: null               // 渐变风痕
     };
 
-    function makeCanvas(w, h) {
+    // 低内存设备：降烘焙倍率与旋转变体数，纹理内存减半
+    const LOW_MEM = (function () {
+        try { return (navigator.deviceMemory || 4) <= 2; } catch (e) { return false; }
+    })();
+    const BAKE_SS = LOW_MEM ? 1.5 : 2;      // sprite 烘焙超采样倍率
+
+    function makeCanvas(w, h, ss) {
+        const s = ss || 1;
         const c = document.createElement('canvas');
-        c.width = Math.max(1, Math.ceil(w));
-        c.height = Math.max(1, Math.ceil(h));
+        c.width = Math.max(1, Math.ceil(w * s));
+        c.height = Math.max(1, Math.ceil(h * s));
         return c;
     }
 
-    function bakePetal(size, rimAlpha, steps, deep) {
-        const base = makeCanvas(size * 3, size * 3);
-        const half = base.width / 2;
-        const c = base.getContext('2d');
-        c.translate(half, half);
-        const r = size * 0.5;
-        const g = c.createLinearGradient(-r, -r, r, r);
-        if (deep) {
-            // 亮色 / 花哨壁纸：加深花瓣本色并加重描边，否则会糊进背景
-            g.addColorStop(0, 'rgba(255,226,238,1)');
-            g.addColorStop(0.55, 'rgba(246,148,180,0.98)');
-            g.addColorStop(1, 'rgba(206,90,136,0.95)');
-        } else {
-            g.addColorStop(0, 'rgba(255,238,244,0.98)');
-            g.addColorStop(0.55, 'rgba(255,183,197,0.95)');
-            g.addColorStop(1, 'rgba(236,136,172,0.9)');
-        }
-        c.fillStyle = g;
+    // 花瓣绘制原语：双 arc 复刻 border-radius:100% 0 100% 0 的透镜形（两端尖 / 两侧圆润），
+    // 即老版 CSS 花瓣的几何等价。入参为已 translate 到中心、按 CSS 单位缩放的上下文。
+    function petalPath(c, r) {
         c.beginPath();
         c.moveTo(0, -r);
-        c.bezierCurveTo(r * 1.05, -r * 0.85, r * 0.85, r * 0.7, 0, r);
-        c.bezierCurveTo(-r * 0.85, r * 0.7, -r * 1.05, -r * 0.85, 0, -r);
+        c.arc(-r, 0, r * Math.SQRT2, -Math.PI / 4, Math.PI / 4);
+        c.arc(r, 0, r * Math.SQRT2, Math.PI * 0.75, Math.PI * 1.25);
+        c.closePath();
+    }
+
+    function bakePetal(size, deep, steps) {
+        const span = size * 3;                 // 画布 CSS 边长
+        const base = makeCanvas(span, span, BAKE_SS);
+        const c = base.getContext('2d');
+        c.scale(BAKE_SS, BAKE_SS);
+        c.translate(span / 2, span / 2);
+        const r = size * 0.5;
+
+        // 底层柔光：老版 box-shadow 0 0 5px 的等价物；亮色壁纸下弱化避免发脏
+        const glowR = r * 2.6;
+        const glowA = deep ? 0.2 : 0.45;
+        const gg = c.createRadialGradient(0, 0, 0, 0, 0, glowR);
+        gg.addColorStop(0, 'rgba(255,183,197,' + glowA + ')');
+        gg.addColorStop(0.5, 'rgba(255,183,197,' + (glowA * 0.38) + ')');
+        gg.addColorStop(1, 'rgba(255,183,197,0)');
+        c.fillStyle = gg;
+        c.beginPath();
+        c.arc(0, 0, glowR, 0, Math.PI * 2);
         c.fill();
-        if (rimAlpha > 0) {
-            c.strokeStyle = (deep ? 'rgba(104,32,62,' : 'rgba(146,70,102,') + rimAlpha + ')';
-            c.lineWidth = Math.max(0.6, r * (deep ? 0.18 : 0.12));
+
+        // 花瓣本体：干净平色（老版 #ffb7c5 基准）；暗色壁纸不加描边
+        petalPath(c, r);
+        c.fillStyle = deep ? '#f29db1' : '#ffb7c5';
+        c.fill();
+        if (deep) {
+            // 亮色壁纸：极淡细描边保证可辨，不做黑红重描边
+            c.strokeStyle = 'rgba(150,60,95,0.28)';
+            c.lineWidth = Math.max(0.5, r * 0.09);
             c.stroke();
         }
+
         // 预旋转成固定份数的变体，运行期按角度取图，省掉每帧矩阵运算
         const variants = [];
         for (let i = 0; i < steps; i++) {
-            const s = makeCanvas(base.width, base.height);
+            const s = makeCanvas(span, span, BAKE_SS);
             const sc = s.getContext('2d');
-            sc.translate(base.width / 2, base.height / 2);
+            sc.translate(s.width / 2, s.height / 2);
             sc.rotate(i / steps * Math.PI * 2);
             sc.drawImage(base, -base.width / 2, -base.height / 2);
             variants.push(s);
         }
-        return { variants: variants, half: half, steps: steps };
+        return { variants: variants, half: span / 2, size: span, steps: steps };
     }
 
     function bakeSnow(size) {
-        const s = makeCanvas(size * 3.2, size * 3.2);
+        const span = size * 3.2;
+        const s = makeCanvas(span, span, BAKE_SS);
         const c = s.getContext('2d');
-        const cx = s.width / 2, r = size * 0.5;
+        c.scale(BAKE_SS, BAKE_SS);
+        const cx = span / 2, r = size * 0.5;
         const g = c.createRadialGradient(cx, cx, 0, cx, cx, r * 1.6);
         g.addColorStop(0, 'rgba(255,255,255,0.98)');
         g.addColorStop(0.5, 'rgba(236,246,255,0.7)');
@@ -182,13 +210,15 @@
         c.beginPath();
         c.arc(cx, cx, r * 1.6, 0, Math.PI * 2);
         c.fill();
-        return { img: s, half: cx };
+        return { img: s, half: cx, size: span };
     }
 
     function bakeGlow(radius, rgb) {
-        const s = makeCanvas(radius * 6, radius * 6);
+        const span = radius * 6;
+        const s = makeCanvas(span, span, BAKE_SS);
         const c = s.getContext('2d');
-        const cx = s.width / 2;
+        c.scale(BAKE_SS, BAKE_SS);
+        const cx = span / 2;
         const g = c.createRadialGradient(cx, cx, 0, cx, cx, radius * 2.6);
         g.addColorStop(0, 'rgba(' + rgb + ',0.95)');
         g.addColorStop(0.35, 'rgba(' + rgb + ',0.34)');
@@ -197,16 +227,19 @@
         c.beginPath();
         c.arc(cx, cx, radius * 2.6, 0, Math.PI * 2);
         c.fill();
-        return { img: s, half: cx };
+        return { img: s, half: cx, size: span };
     }
 
     function bakeGlint(radius) {
-        const s = makeCanvas(radius * 6, radius * 6);
+        const span = radius * 6;
+        const s = makeCanvas(span, span, BAKE_SS);
         const c = s.getContext('2d');
-        const cx = s.width / 2;
+        c.scale(BAKE_SS, BAKE_SS);
+        const cx = span / 2;
         c.translate(cx, cx);
         c.strokeStyle = 'rgba(255,247,216,0.95)';
         c.lineWidth = 1.5;
+        c.lineCap = 'round';                   // 臂尖圆润，避免平头硬切
         c.beginPath();
         c.moveTo(-radius * 2.4, 0); c.lineTo(radius * 2.4, 0);
         c.moveTo(0, -radius * 2.4); c.lineTo(0, radius * 2.4);
@@ -218,7 +251,7 @@
         c.beginPath();
         c.arc(0, 0, radius * 1.1, 0, Math.PI * 2);
         c.fill();
-        return { img: s, half: cx };
+        return { img: s, half: cx, size: span };
     }
 
     function bakeFog(radius) {
@@ -240,18 +273,78 @@
         return { img: s, half: cx };
     }
 
+    // 星点：柔光小圆点（不画十字——十字是星芒 glint 的视觉身份，圆点拉开层次）
+    function bakeStar(coreR) {
+        const span = coreR * 5;
+        const s = makeCanvas(span, span, BAKE_SS);
+        const c = s.getContext('2d');
+        c.scale(BAKE_SS, BAKE_SS);
+        const cx = span / 2;
+        const g = c.createRadialGradient(cx, cx, 0, cx, cx, coreR * 2.2);
+        g.addColorStop(0, 'rgba(255,255,255,0.95)');
+        g.addColorStop(0.4, 'rgba(240,247,255,0.42)');
+        g.addColorStop(1, 'rgba(220,235,255,0)');
+        c.fillStyle = g;
+        c.beginPath();
+        c.arc(cx, cx, coreR * 2.2, 0, Math.PI * 2);
+        c.fill();
+        return { img: s, half: cx, size: span };
+    }
+
+    // 雨丝：头亮尾透的渐变细线，替代纯色 fillRect
+    function bakeRainStreak() {
+        const W = 6, H = 40;
+        const s = makeCanvas(W, H, BAKE_SS);
+        const c = s.getContext('2d');
+        c.scale(BAKE_SS, BAKE_SS);
+        const g = c.createLinearGradient(0, 0, 0, H);
+        g.addColorStop(0, 'rgba(222,238,255,0.05)');
+        g.addColorStop(0.55, 'rgba(222,238,255,0.5)');
+        g.addColorStop(1, 'rgba(232,244,255,0.95)');
+        c.strokeStyle = g;
+        c.lineCap = 'round';
+        c.lineWidth = 3;
+        c.beginPath();
+        c.moveTo(W / 2, 1.5);
+        c.lineTo(W / 2, H - 1.5);
+        c.stroke();
+        return { img: s, w: W, h: H };
+    }
+
+    // 风痕：水平渐变细带（尾端渐隐），与雨丝统一质感
+    function bakeWindStreak() {
+        const W = 64, H = 4;
+        const s = makeCanvas(W, H, BAKE_SS);
+        const c = s.getContext('2d');
+        c.scale(BAKE_SS, BAKE_SS);
+        const g = c.createLinearGradient(0, 0, W, 0);
+        g.addColorStop(0, 'rgba(222,238,255,0.05)');
+        g.addColorStop(1, 'rgba(232,244,255,0.85)');
+        c.strokeStyle = g;
+        c.lineCap = 'round';
+        c.lineWidth = 1.6;
+        c.beginPath();
+        c.moveTo(1.5, H / 2);
+        c.lineTo(W - 1.5, H / 2);
+        c.stroke();
+        return { img: s, w: W, h: H };
+    }
+
     let baked = false;
     function bakeSprites() {
         if (baked) return;
         const sizes = [5, 10, 17];      // 远 / 中 / 近三档花瓣
-        const steps = [8, 8, 16];       // 近景用更细的旋转变体，避免一顿一顿
-        SPR.petal = sizes.map((s, i) => bakePetal(s, 0.18, steps[i], false));
-        SPR.petalSoft = sizes.map((s, i) => bakePetal(s, 0.55, steps[i], true));
+        const steps = LOW_MEM ? [16, 16, 24] : [24, 24, 32];   // 旋转档数：24 步=15°/档，低于感知阈值
+        SPR.petal = sizes.map((s, i) => bakePetal(s, false, steps[i]));
+        SPR.petalSoft = sizes.map((s, i) => bakePetal(s, true, steps[i]));
         SPR.snow = [4, 7, 11].map(bakeSnow);
         SPR.glowWarm = bakeGlow(11, '255,214,140');
         SPR.glowCool = bakeGlow(11, '196,224,255');
         SPR.glint = bakeGlint(7);
-        SPR.fog = bakeFog(120);
+        SPR.fog = bakeFog(120);         // 雾保持 1x：绘制放大 1.5~2.2 倍，糊是特性
+        SPR.stars = [bakeStar(1.4), bakeStar(2.2)];
+        SPR.rain = bakeRainStreak();
+        SPR.wind = bakeWindStreak();
         baked = true;
     }
 
@@ -280,7 +373,8 @@
                 p.f = rnd(0.35, 0.95);
                 p.ph = rnd(0, 6.28);
                 p.vr = rnd(g.spin[0], g.spin[1]) * (Math.random() < 0.5 ? -1 : 1);
-                p.rot = rndInt(0, SPR.petal[p.size].steps - 1);
+                p.rot = rnd(0, 6.28);                 // 弧度
+                p.sub = rnd(0, 6.28);                 // 副摆相位
 
             } else if (g.kind === K_SNOW) {
                 p.size = g.size;
@@ -291,6 +385,7 @@
                 p.amp = rnd(g.sway[0], g.sway[1]);
                 p.f = rnd(0.3, 0.9);
                 p.ph = rnd(0, 6.28);
+                p.sub = rnd(0, 6.28);                 // 副摆相位
 
             } else if (g.kind === K_MOTE) {
                 p.x = rnd(0, state.w);
@@ -316,7 +411,7 @@
                 p.x = rnd(0, state.w);
                 p.y = rnd(state.h * g.area[0], state.h * g.area[1]);
                 p.a = rnd(g.a[0], g.a[1]);
-                p.size = Math.random() < 0.75 ? 1 : 2;
+                p.size = Math.random() < 0.75 ? 0 : 1;  // 星点档位（两档柔光 sprite）
                 p.f = rnd(0.4, 1.6);
                 p.ph = rnd(0, 6.28);
 
@@ -374,7 +469,9 @@
         const w = Math.max(1, Math.round(window.innerWidth || document.documentElement.clientWidth || 1));
         const h = Math.max(1, Math.round(window.innerHeight || document.documentElement.clientHeight || 1));
         state.w = w; state.h = h;
-        state.dpr = Math.min(window.devicePixelRatio || 1, CFG.DPR_CAP);
+        // rich 档放宽 dpr 上限换清晰度；省电档位与低内存设备维持 1.5
+        const cap = (state.level === 'rich' && !LOW_MEM) ? CFG.DPR_CAP_RICH : CFG.DPR_CAP;
+        state.dpr = Math.min(window.devicePixelRatio || 1, cap);
         cv.width = Math.round(w * state.dpr);
         cv.height = Math.round(h * state.dpr);
         ctx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
@@ -391,6 +488,7 @@
     function buildPreset(type, scale) {
         parts.length = 0;
         oneshots.length = 0;
+        state.buildAt = performance.now();     // 重建后全场 0.9s 淡入，避免闪现
         const groups = PRESETS[type] || PRESETS.sakura;
         for (let i = 0; i < groups.length; i++) {
             const g = groups[i];
@@ -433,13 +531,15 @@
         curAlpha = a;
     }
 
+    let curPetalSet = null;                  // render 开头 hoist，避免逐粒子查色调
+
     function drawPetal(size, rot, x, y, alpha) {
-        const set = petalSet()[size];
+        const set = curPetalSet[size];
         const steps = set.steps;
-        const idx = (((rot % steps) + steps) % steps) | 0;
+        const idx = (((rot * steps / 6.2831853) % steps + steps) % steps) | 0;   // rot 为弧度
         const spr = set.variants[idx];
         setAlpha(alpha);
-        ctx.drawImage(spr, (x - set.half) | 0, (y - set.half) | 0);
+        ctx.drawImage(spr, x - set.half, y - set.half, set.size, set.size);
     }
 
     function render(dt) {
@@ -447,6 +547,9 @@
         ctx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
         ctx.clearRect(0, 0, W, H);
         curAlpha = -1;
+        curPetalSet = petalSet();
+        // 构建淡入：切天气 / 自适应降级重建时全场 0.9s 淡入，消除整体闪现
+        const gFade = state.buildAt ? Math.min(1, (performance.now() - state.buildAt) / 900) : 1;
 
         // ---- 常驻粒子 ----
         for (let i = parts.length - 1; i >= 0; i--) {
@@ -455,31 +558,34 @@
             if (p.vx) p.vx *= Math.pow(0.3, dt);       // 阵风冲量指数衰减
             p.y += p.vy * dt;
             if (p.f) p.ph += p.f * dt;
+            if (p.sub) p.sub += p.f * 0.37 * dt;       // 副摆相位（花瓣/雪花双频摇摆）
 
             switch (p.k) {
                 case K_PETAL: {
                     if (p.vr) p.rot += p.vr * dt;
                     if (p.y > H + 30) { p.y = -30; p.x = rnd(0, W); }
-                    const x = p.x + Math.sin(p.ph) * p.amp;
+                    const x = p.x + Math.sin(p.ph) * p.amp + Math.sin(p.sub) * p.amp * 0.35;
                     if (x < -60) p.x = W + 40; else if (x > W + 60) p.x = -40;
-                    drawPetal(p.size, p.rot, x, p.y, p.a);
+                    const edge = p.y < 48 ? Math.max(0, Math.min(1, (p.y + 24) / 72)) : 1;
+                    drawPetal(p.size, p.rot, x, p.y, p.a * gFade * edge);
                     break;
                 }
                 case K_SNOW: {
                     if (p.y > H + 20) { p.y = -20; p.x = rnd(0, W); }
                     const spr = SPR.snow[p.size];
-                    const x = p.x + Math.sin(p.ph) * p.amp;
-                    setAlpha(p.a);
-                    ctx.drawImage(spr.img, (x - spr.half) | 0, (p.y - spr.half) | 0);
+                    const x = p.x + Math.sin(p.ph) * p.amp + Math.sin(p.sub) * p.amp * 0.35;
+                    const edge = p.y < 48 ? Math.max(0, Math.min(1, (p.y + 24) / 72)) : 1;
+                    setAlpha(p.a * gFade * edge);
+                    ctx.drawImage(spr.img, x - spr.half, p.y - spr.half, spr.size, spr.size);
                     break;
                 }
                 case K_MOTE: {
-                    if (p.y < -30) { p.y = H + 30; p.x = rnd(0, W); }
-                    if (p.x < -40) p.x = W + 30; else if (p.x > W + 40) p.x = -30;
+                    if (p.y < -40) { p.y = H + 40; p.x = rnd(0, W); }
+                    if (p.x < -40) p.x = W + 40; else if (p.x > W + 40) p.x = -40;
                     const spr = p.size ? SPR.glowCool : SPR.glowWarm;
-                    const sz = spr.img.width * p.scale;
-                    setAlpha(p.a * (0.55 + 0.45 * Math.sin(p.ph)));
-                    ctx.drawImage(spr.img, (p.x - sz / 2) | 0, (p.y - sz / 2) | 0, sz, sz);
+                    const sz = spr.size * p.scale;
+                    setAlpha(p.a * gFade * (0.55 + 0.45 * Math.sin(p.ph)));
+                    ctx.drawImage(spr.img, p.x - sz / 2, p.y - sz / 2, sz, sz);
                     break;
                 }
                 case K_GLINT: {
@@ -495,9 +601,9 @@
                     const k = Math.sin(Math.PI * t);
                     if (k < 0.02) break;
                     const spr = SPR.glint;
-                    const sz = spr.img.width * p.scale * (0.7 + 0.5 * k);
-                    setAlpha(p.a * k);
-                    ctx.drawImage(spr.img, (p.x - sz / 2) | 0, (p.y - sz / 2) | 0, sz, sz);
+                    const sz = spr.size * p.scale * (0.7 + 0.5 * k);
+                    setAlpha(p.a * k * gFade);
+                    ctx.drawImage(spr.img, p.x - sz / 2, p.y - sz / 2, sz, sz);
                     break;
                 }
                 case K_RAIN: {
@@ -516,23 +622,23 @@
                         p.x = rnd(-40, W + 40);
                     }
                     if (p.x < -60) p.x = W + 40;
-                    ctx.fillStyle = 'rgb(202,226,255)';
-                    setAlpha(p.a);
-                    ctx.fillRect(p.x | 0, p.y | 0, p.size, p.len);
+                    const spr = SPR.rain;
+                    setAlpha(p.a * gFade);
+                    ctx.drawImage(spr.img, p.x | 0, p.y | 0, p.size, p.len);
                     break;
                 }
                 case K_STAR: {
-                    setAlpha(p.a * (0.55 + 0.45 * Math.sin(p.ph)));
-                    ctx.fillStyle = '#ffffff';
-                    ctx.fillRect(p.x | 0, p.y | 0, p.size, p.size);
+                    setAlpha(p.a * (0.55 + 0.45 * Math.sin(p.ph)) * gFade);
+                    const spr = SPR.stars[p.size];
+                    ctx.drawImage(spr.img, (p.x - spr.half) | 0, (p.y - spr.half) | 0, spr.size, spr.size);
                     break;
                 }
                 case K_FOG: {
                     const spr = SPR.fog;
                     if (p.x < -spr.half * p.scale) { p.x = W + spr.half * p.scale * 0.6; p.y = rnd(H * 0.3, H); }
-                    setAlpha(p.a);
-                    ctx.drawImage(spr.img, (p.x - spr.half * p.scale) | 0,
-                                  (p.y - spr.img.height * p.scale / 2) | 0,
+                    setAlpha(p.a * gFade);
+                    ctx.drawImage(spr.img, p.x - spr.half * p.scale,
+                                  p.y - spr.img.height * p.scale / 2,
                                   spr.img.width * p.scale, spr.img.height * p.scale);
                     break;
                 }
@@ -558,26 +664,27 @@
                 case K_GLINT: {
                     const k = Math.sin(Math.PI * t);
                     const spr = SPR.glint;
-                    const sz = spr.img.width * p.scale * (0.7 + 0.5 * k);
+                    const sz = spr.size * p.scale * (0.7 + 0.5 * k);
                     setAlpha(p.a * k);
-                    ctx.drawImage(spr.img, (p.x - sz / 2) | 0, (p.y - sz / 2) | 0, sz, sz);
+                    ctx.drawImage(spr.img, p.x - sz / 2, p.y - sz / 2, sz, sz);
                     break;
                 }
                 case K_MOTE: {
                     const spr = p.size ? SPR.glowCool : SPR.glowWarm;
-                    const sz = spr.img.width * p.scale;
+                    const sz = spr.size * p.scale;
                     setAlpha(p.a * (1 - t) * (0.6 + 0.4 * Math.sin(p.ph * 3 + p.life * 6)));
-                    ctx.drawImage(spr.img, (p.x - sz / 2) | 0, (p.y - sz / 2) | 0, sz, sz);
+                    ctx.drawImage(spr.img, p.x - sz / 2, p.y - sz / 2, sz, sz);
                     break;
                 }
                 case K_STREAK: {
-                    ctx.fillStyle = 'rgb(214,232,255)';
                     if (p.sub === 1) {                 // 雨溅：竖直小水柱
+                        ctx.fillStyle = 'rgb(214,232,255)';
                         setAlpha(p.a * (1 - t));
                         ctx.fillRect(p.x | 0, (p.y - t * 8) | 0, 1, 3 + t * 3);
-                    } else {                          // 风痕：横向细线
+                    } else {                          // 风痕：横向渐变细带
+                        const spr = SPR.wind;
                         setAlpha(p.a * (1 - t));
-                        ctx.fillRect(p.x | 0, (p.y + Math.sin(t * 6) * 6) | 0, p.len, 1.4);
+                        ctx.drawImage(spr.img, p.x | 0, (p.y + Math.sin(t * 6) * 6 - spr.h / 2) | 0, p.len, spr.h);
                     }
                     break;
                 }
@@ -816,6 +923,7 @@
         if (level === 'off') { stop(); syncBodyClasses(); return; }
         state.downgrade = 0;
         state.overMs = 0; state.okMs = 0;
+        fitCanvas();               // dpr 上限随档位变化（rich→2），画布需重设
         applyQuality();
     }
 
