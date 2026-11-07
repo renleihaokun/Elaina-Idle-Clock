@@ -1,5 +1,4 @@
 :root {
-    --bg-url: 'https://elaina.haokun.me';
     --ui-scale: 1;
 }
 
@@ -570,6 +569,15 @@ body.fx-low .widget {
 
 body.fx-low .modal-panel {
     background: rgba(16, 12, 26, 0.88);
+}
+
+/* 特效关闭 / 降级到低档时，一并停掉常驻装饰动画：
+   低端机的合成器不该为纯装饰的无限循环动画空转，长期挂机时这部分会实实在在变成发热与耗电 */
+body.fx-off .progress-fill::after,
+body.fx-low .progress-fill::after,
+body.fx-off .top-left::before,
+body.fx-low .top-left::before {
+    animation: none;
 }
 
 /* 用户/系统要求减少动效时，收掉所有装饰动画 */

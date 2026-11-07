@@ -5,9 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>伊蕾娜の魔法手账</title>
     
-    <!-- 外部资源 -->
-    <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&display=swap" rel="stylesheet">
-    <script src="https://cdn.jsdelivr.net/npm/lunar-javascript/lunar.min.js"></script>
+    <!-- 外部资源（样式与脚本都不阻塞首屏：字体用 media 切换异步加载，农历库 async） -->
+    <link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&display=swap" rel="stylesheet" media="print" onload="this.media='all'">
+    <noscript><link href="https://fonts.googleapis.com/css2?family=ZCOOL+KuaiLe&display=swap" rel="stylesheet"></noscript>
+    <script src="https://cdn.jsdelivr.net/npm/lunar-javascript/lunar.min.js" async></script>
     
     <!-- 本地样式 -->
     <link rel="stylesheet" href="style.css">
@@ -55,8 +56,8 @@
             <span id="hitokoto-author"></span>
         </section>
 
-        <!-- 右下：课表与进度 -->
-        <section class="widget bottom-right course-side-layout" onclick="document.getElementById('ics-upload').click()">
+        <!-- 右下：课表与进度（点击导入见 script.js 的事件绑定） -->
+        <section class="widget bottom-right course-side-layout" title="点击导入课表(.ics)，长按进行中的课程可标记翘课">
             <!-- 左侧：纵向贯穿的标签 -->
             <span id="course-label" class="course-group-label">加载中</span>
             <!-- 中间：纵向分割线 -->
@@ -111,8 +112,7 @@
         </div>
     </aside>
 
-    <!-- 巴法云亮度控制 -->
-    <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+    <!-- 巴法云亮度控制（mqtt 库由 bemfa.js 按需异步加载，避免 CDN 阻塞首屏） -->
     <script src="bemfa.js" defer></script>
 
     <!-- 核心逻辑 -->

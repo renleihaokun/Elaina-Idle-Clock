@@ -31,8 +31,10 @@
         MAX_ONESHOTS: 56,          // 一次性特效（爆发/星芒/风痕）上限
         LEVEL_KEY: 'elaina_fx_level',
         DEFAULT_LEVEL: 'normal',
-        JANK_MS: 34,               // 帧间隔超过此值 = 已掉到 30fps 以下
+        JANK_MS: 34,               // 显示刷新间隔超过此值 = 实际帧率已跌破 30fps
         DRAW_BUDGET_MS: 8,         // 单帧自身绘制耗时上限（约半个 60Hz 帧）
+        DRAW_SLACK: 1.9,           // 出帧间隔超过目标间隔的倍数 → 判为掉帧
+        DRAW_ROOMY_SLACK: 1.3,     // 出帧间隔在这个倍数以内才算「余量充足」
         ROOMY_MS: 24,              // 「余量充足」的帧间隔
         DRAW_ROOMY_MS: 4,          // 「余量充足」的自身耗时
         STALL_MS: 250,             // 超过此间隔说明合成器没在出帧（息屏/窗口被遮挡），不计入采样
@@ -98,6 +100,7 @@
         acc: 0,
         gapEma: 0,
         drawEma: 0,
+        drawGapEma: 0,
         overMs: 0,
         okMs: 0,
         lastPulse: 0,
@@ -128,10 +131,20 @@
         wind: null               // 渐变风痕
     };
 
-    // 低内存设备：降烘焙倍率与旋转变体数，纹理内存减半
-    const LOW_MEM = (function () {
-        try { return (navigator.deviceMemory || 4) <= 2; } catch (e) { return false; }
-    })();
+    // 低内存设备：降烘焙倍率与旋转变体数，纹理内存减半。
+    // deviceMemory 只有 Chromium 系支持，iOS Safari / Firefox 上恒为 undefined；
+    // 用「移动端 + 核心数少」兜底，避免老 iPhone / iPad 因 canvas 纹理过大而掉帧甚至崩溃。
+    function detectLowMem() {
+        try {
+            const mem = navigator.deviceMemory;
+            if (typeof mem === 'number') return mem <= 2;
+            const ua = navigator.userAgent || '';
+            const mobile = /iPhone|iPad|iPod|Android|Mobile/i.test(ua);
+            const cores = navigator.hardwareConcurrency || 4;
+            return mobile && cores <= 4;
+        } catch (e) { return false; }
+    }
+    const LOW_MEM = detectLowMem();
     const BAKE_SS = LOW_MEM ? 1.5 : 2;      // sprite 烘焙超采样倍率
 
     function makeCanvas(w, h, ss) {
@@ -512,13 +525,13 @@
         const dt = Math.min(state.acc, 100) / 1000;   // 卡顿时钳制，避免粒子瞬移
         state.acc = 0;
 
-        // 距离上一次真正绘制的墙钟时间：跳帧时它比 rAF 间隔大，用它累计才准
-        const sinceLastDraw = state.lastDraw ? Math.min(ts - state.lastDraw, 1000) : cap;
+        // 距上一次真正绘制的墙钟间隔：跳帧时它比 rAF 间隔大，用它衡量「实际出帧节奏」
+        const drawGap = state.lastDraw ? Math.min(ts - state.lastDraw, 1000) : cap;
         state.lastDraw = ts;
 
         const t0 = performance.now();
         render(dt);
-        sampleQuality(gap, performance.now() - t0, sinceLastDraw);
+        sampleQuality(gap, performance.now() - t0, drawGap, cap);
 
         state.rafId = requestAnimationFrame(tick);
     }
@@ -693,22 +706,29 @@
     }
 
     // ================= 自适应质量 =================
-    function sampleQuality(gap, drawMs, elapsed) {
+    function sampleQuality(gap, drawMs, drawGap, targetGap) {
         // 合成器长时间不出帧（息屏 / 窗口被遮挡 / 切到后台）时不计入采样，恢复后重新学习
         if (gap > CFG.STALL_MS) {
-            state.gapEma = 0; state.drawEma = 0;
+            state.gapEma = 0; state.drawEma = 0; state.drawGapEma = 0;
             state.overMs = 0; state.okMs = 0;
             return;
         }
 
         state.gapEma = state.gapEma ? state.gapEma * 0.88 + gap * 0.12 : gap;
         state.drawEma = state.drawEma ? state.drawEma * 0.88 + drawMs * 0.12 : drawMs;
+        state.drawGapEma = state.drawGapEma ? state.drawGapEma * 0.88 + drawGap * 0.12 : drawGap;
 
-        const jank = state.gapEma > CFG.JANK_MS || state.drawEma > CFG.DRAW_BUDGET_MS;
-        const roomy = state.gapEma < CFG.ROOMY_MS && state.drawEma < CFG.DRAW_ROOMY_MS;
+        // 两条通道都要看：
+        //   gapEma     —— 浏览器给的刷新节奏，反映 GPU/合成器是否真的画得动（跌破 30fps 才判卡）
+        //   drawGapEma —— 我们自己的出帧间隔，还要叠加帧率上限，所以按「目标间隔的倍数」判断，
+        //                 否则 30fps 档位下自身 33ms 的节奏会被误判成掉帧
+        const jank = state.gapEma > CFG.JANK_MS || state.drawEma > CFG.DRAW_BUDGET_MS ||
+                     state.drawGapEma > targetGap * CFG.DRAW_SLACK;
+        const roomy = state.gapEma < CFG.ROOMY_MS && state.drawEma < CFG.DRAW_ROOMY_MS &&
+                      state.drawGapEma < targetGap * CFG.DRAW_ROOMY_SLACK;
 
-        if (jank) { state.overMs += elapsed; state.okMs = 0; }
-        else if (roomy) { state.okMs += elapsed; state.overMs = 0; }
+        if (jank) { state.overMs += drawGap; state.okMs = 0; }
+        else if (roomy) { state.okMs += drawGap; state.overMs = 0; }
         else { state.overMs = 0; state.okMs = 0; }
 
         if (state.overMs > CFG.DOWNGRADE_MS && state.downgrade < 3) {
@@ -891,8 +911,11 @@
         // 未配置过：低端机起手就轻一档
         try {
             const cores = navigator.hardwareConcurrency || 4;
-            const mem = navigator.deviceMemory || 4;
-            if (cores <= 4 || mem <= 2) return 'light';
+            const mem = navigator.deviceMemory;
+            // 有 deviceMemory 按内存/核心判断；没有时（iOS Safari / Firefox）
+            // 沿用与 LOW_MEM 相同的移动端兜底，避免老设备一上来就是标准档
+            const lowMem = (typeof mem === 'number') ? mem <= 2 : LOW_MEM;
+            if (cores <= 4 || lowMem) return 'light';
         } catch (e) { /* 忽略 */ }
         return CFG.DEFAULT_LEVEL;
     }
@@ -975,6 +998,7 @@
                 downgrade: state.downgrade,
                 fpsCap: state.fpsCap,
                 gapMs: +state.gapEma.toFixed(2),
+                drawGapMs: +state.drawGapEma.toFixed(2),
                 drawMs: +state.drawEma.toFixed(2),
                 drawables: parts.length,
                 oneshots: oneshots.length,
