@@ -11,12 +11,16 @@
  *   4. 页面不可见时完全停止 rAF，不空转省电。
  *
  * 对外接口（window.ElainaFX）：
- *   start() / stop()
+ *   start() / stop() / setPaused(bool)
  *   setLevel(level) / getLevel() / levelLabel(lv) / getLevels()
  *   setWeather(type, opts)                  type: 'sakura' | 'star' | 'rain' | 'snow' | 'fog'
  *   setBackgroundTone(lum)                  0~255，壁纸平均亮度，用于微调花瓣描边强弱
  *   burst(x, y) / sparkleAt(x, y) / puffAt(el) / wind() / hourPulse()
- *   stats()                                 调试与自检用
+ *   refreshGlass()                          请求页面重建动态毛玻璃表面
+ *   getDeviceInfo() / stats()               调试与自检用
+ *
+ * 调度约定：任何时刻最多一个 pending rAF；画质切换用 generation +1 作废旧回调，
+ * 绝不允许 applyQuality() 自己再 requestAnimationFrame（旧版长跑卡死的根因）。
  */
 (function () {
     'use strict';
@@ -31,15 +35,22 @@
         MAX_ONESHOTS: 56,          // 一次性特效（爆发/星芒/风痕）上限
         LEVEL_KEY: 'elaina_fx_level',
         DEFAULT_LEVEL: 'normal',
-        JANK_MS: 34,               // 显示刷新间隔超过此值 = 实际帧率已跌破 30fps
+        JANK_MS: 34,               // 判卡绝对下限；实际还会按 baselineGap*1.6 动态放宽
         DRAW_BUDGET_MS: 8,         // 单帧自身绘制耗时上限（约半个 60Hz 帧）
         DRAW_SLACK: 1.9,           // 出帧间隔超过目标间隔的倍数 → 判为掉帧
-        DRAW_ROOMY_SLACK: 1.3,     // 出帧间隔在这个倍数以内才算「余量充足」
-        ROOMY_MS: 24,              // 「余量充足」的帧间隔
+        DRAW_ROOMY_SLACK: 1.55,    // 出帧间隔在这个倍数以内才算「余量充足」；
+                                   // 30Hz 屏 + 20fps 档会按 2 帧节奏出帧（约 66ms），
+                                   // 1.3 倍（65ms）会永远差 1ms 升不回去，故放宽到 1.55。
         DRAW_ROOMY_MS: 4,          // 「余量充足」的自身耗时
         STALL_MS: 250,             // 超过此间隔说明合成器没在出帧（息屏/窗口被遮挡），不计入采样
-        DOWNGRADE_MS: 2000,        // 吃紧持续多久降级
-        UPGRADE_MS: 15000          // 余量充足持续多久升级
+        PIXEL_BUDGET_LOW: 1600000, // 低内存设备的 canvas 像素预算（约 1600×1000）
+        PIXEL_BUDGET: 3200000,     // 普通设备预算；超过就主动降 canvas 分辨率，别让软件光栅/显存爆
+        BASELINE_SAMPLES: 60,      // 启动后采样多少帧来学习当前设备的 rAF 基线
+        QUALITY_DOWN_MS: 3000,     // 持续吃紧多久降一档（比原来的 2s 更抗瞬时卡顿）
+        QUALITY_UP_MS: 30000,      // 持续富余多久升一档
+        QUALITY_COOLDOWN_MS: 20000,// 两次画质切换最小间隔，杜绝来回抖动
+        WATCHDOG_MS: 2000,         // 看门狗检查间隔
+        TICK_STALL_MS: 3000        // 可见状态下多久没出帧就判定为卡住
     };
 
     const LEVELS = ['off', 'light', 'normal', 'rich'];
@@ -85,6 +96,7 @@
     const state = {
         started: false,
         running: false,
+        paused: false,           // 夜间黑屏 / 打开设置面板时暂停（与 level='off' 独立）
         level: CFG.DEFAULT_LEVEL,
         preset: 'sakura',
         thunder: false,
@@ -92,26 +104,37 @@
         w: 1, h: 1, dpr: 1,
         fpsCap: 30,
         noGlint: false,          // 降级 1 级：去掉星芒
-        noHeavy: false,          // 降级 2 级：去掉大面积柔光（浮尘 / 雾团）并关闭卡片毛玻璃
+        noHeavy: false,          // 降级 2 级：去掉大面积柔光（浮尘 / 雾团）；毛玻璃不再由这里关
         downgrade: 0,            // 自适应降级层级 0~3
         rafId: 0,
+        rafGen: 0,               // 调度代际：每次重启 +1，旧回调全部作废
+        rafLive: 0,              // 当前 pending 的 rAF 数，正常必须为 0/1
         last: 0,
         lastDraw: 0,
+        lastTickAt: 0,
+        tickCount: 0,
         acc: 0,
         gapEma: 0,
         drawEma: 0,
         drawGapEma: 0,
         overMs: 0,
         okMs: 0,
+        baselineGap: 0,          // 当前设备/当前省电模式的 rAF 间隔基线
+        baselineSamples: 0,
+        lastQualityChange: 0,
+        transitions: 0,
+        errCount: 0,
         lastPulse: 0,
         buildAt: 0,              // buildPreset 时间戳，用于 0.9s 全场淡入
-        reduced: false
+        reduced: false,
+        pixelBudget: CFG.PIXEL_BUDGET
     };
 
     let cv = null, ctx = null;
     const parts = [];            // 常驻粒子
     const oneshots = [];         // 一次性粒子（爆发 / 风痕 / 雨溅）
     const oneFree = [];          // 一次性粒子对象池
+    const partFree = [];         // 常驻粒子对象池，避免画质切换时反复 new
 
     const rnd = (a, b) => a + Math.random() * (b - a);
     const rndInt = (a, b) => Math.floor(a + Math.random() * (b - a + 1));
@@ -137,8 +160,13 @@
     function detectLowMem() {
         try {
             const mem = navigator.deviceMemory;
-            if (typeof mem === 'number') return mem <= 2;
             const ua = navigator.userAgent || '';
+            if (typeof mem === 'number') {
+                // Android 的 deviceMemory 是按 2 的幂取整的，3GB 机常报 4。
+                // 32 位 Android 长期挂机的目标设备统一按低内存处理，纹理/DPR 都省一档。
+                if (/Android/i.test(ua)) return mem <= 4;
+                return mem <= 2;
+            }
             const mobile = /iPhone|iPad|iPod|Android|Mobile/i.test(ua);
             const cores = navigator.hardwareConcurrency || 4;
             return mobile && cores <= 4;
@@ -370,11 +398,24 @@
                  life: 0, max: 1, scale: 1, len: 1 };
     }
 
+    function resetParticle(p, kind) {
+        p.k = kind;
+        p.x = 0; p.y = 0; p.vx = 0; p.vy = 0; p.dx = 0; p.sub = 0; p.size = 0;
+        p.a = 0.6; p.amp = 0; p.f = 0; p.ph = 0; p.rot = 0; p.vr = 0; p.g = 0;
+        p.life = 0; p.max = 1; p.scale = 1; p.len = 1;
+        return p;
+    }
+
+    function acquirePart(kind) {
+        const p = partFree.pop() || makeParticle(kind);
+        return resetParticle(p, kind);
+    }
+
     function spawnGroup(g, scale) {
         const n = Math.max(1, Math.round(g.count * scale));
         for (let i = 0; i < n; i++) {
             if (parts.length >= CFG.MAX_DRAWABLES) return;
-            const p = makeParticle(g.kind);
+            const p = acquirePart(g.kind);
 
             if (g.kind === K_PETAL) {
                 p.size = g.size;
@@ -484,10 +525,24 @@
         state.w = w; state.h = h;
         // rich 档放宽 dpr 上限换清晰度；省电档位与低内存设备维持 1.5
         const cap = (state.level === 'rich' && !LOW_MEM) ? CFG.DPR_CAP_RICH : CFG.DPR_CAP;
-        state.dpr = Math.min(window.devicePixelRatio || 1, cap);
-        cv.width = Math.round(w * state.dpr);
-        cv.height = Math.round(h * state.dpr);
-        ctx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
+        let dpr = Math.min(window.devicePixelRatio || 1, cap);
+        // 像素预算：1080p×1.5 已经 580 万像素，32 位老机软件光栅/显存扛不住。
+        // 粒子本身是柔光贴图，宁可降低 canvas 分辨率也不要让整页掉帧。
+        const budget = LOW_MEM ? CFG.PIXEL_BUDGET_LOW : CFG.PIXEL_BUDGET;
+        if (w * h * dpr * dpr > budget) {
+            dpr = Math.max(0.6, Math.min(dpr, Math.sqrt(budget / (w * h))));
+        }
+        state.dpr = dpr;
+        state.pixelBudget = budget;
+        const nw = Math.max(1, Math.round(w * dpr));
+        const nh = Math.max(1, Math.round(h * dpr));
+        // 只有尺寸真的变了才写 width/height：写同值也会重置 backing store，
+        // 部分 Chrome 版本会因此在 GPU 进程里累积大 canvas 纹理。
+        if (cv.width !== nw || cv.height !== nh) {
+            cv.width = nw;
+            cv.height = nh;
+        }
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     }
 
     function effectiveScale() {
@@ -499,7 +554,14 @@
     }
 
     function buildPreset(type, scale) {
+        // 对象回池：画质切换/天气切换不再每次 new 几十个对象，减少 32 位机上的 GC 抖动
+        for (let i = 0; i < parts.length; i++) {
+            if (partFree.length < 128) partFree.push(parts[i]);
+        }
         parts.length = 0;
+        for (let i = 0; i < oneshots.length; i++) {
+            if (oneFree.length < 64) oneFree.push(oneshots[i]);
+        }
         oneshots.length = 0;
         state.buildAt = performance.now();     // 重建后全场 0.9s 淡入，避免闪现
         const groups = PRESETS[type] || PRESETS.sakura;
@@ -512,8 +574,63 @@
     }
 
     // ================= 主循环 =================
+    function diagEvent(type, data) {
+        try {
+            if (window.ElainaDiag && typeof window.ElainaDiag.record === 'function') {
+                window.ElainaDiag.record(type, data);
+            }
+        } catch (e) { /* 诊断不能反过来影响主循环 */ }
+    }
+
+    // 单调度器：任何时刻最多只有一个 pending rAF。
+    // 旧实现 tick() 里调 applyQuality()，applyQuality() 又 requestAnimationFrame，
+    // tick 末尾再排一次，每切一次画质就多一条链，长跑会指数级恶化。
+    function scheduleFrame() {
+        if (!state.running || state.paused) return;
+        const gen = state.rafGen;
+        state.rafLive++;
+        state.rafId = requestAnimationFrame(function (ts) {
+            // 旧代际/已暂停的回调直接退出，不能去减新一代的计数
+            if (gen !== state.rafGen || !state.running || state.paused) return;
+            if (state.rafLive > 0) state.rafLive--;
+            tick(ts);
+        });
+    }
+
+    function cancelFrame() {
+        if (state.rafId) {
+            try { cancelAnimationFrame(state.rafId); } catch (e) { /* 忽略 */ }
+            state.rafId = 0;
+        }
+        state.rafLive = 0;
+    }
+
+    // 重启整个循环：generation +1 让所有旧回调在下一帧自动失效
+    function restartLoop(reason) {
+        state.running = false;
+        state.rafGen++;
+        cancelFrame();
+        if (!state.started || state.paused || state.level === 'off') return;
+        state.running = true;
+        state.last = 0;
+        state.lastDraw = 0;
+        state.acc = 0;
+        state.gapEma = 0;
+        state.drawEma = 0;
+        state.drawGapEma = 0;
+        state.overMs = 0;
+        state.okMs = 0;
+        state.baselineGap = 0;
+        state.baselineSamples = 0;
+        state.lastTickAt = performance.now();
+        scheduleFrame();
+        if (reason) diagEvent('raf-restart', { reason: reason, rafLive: state.rafLive });
+    }
+
     function tick(ts) {
-        if (!state.running) return;
+        if (!state.running || state.paused) return;
+        state.lastTickAt = performance.now();
+        state.tickCount++;
         if (!state.last) state.last = ts;
         let gap = ts - state.last;
         if (gap < 0) gap = 0;
@@ -521,7 +638,7 @@
         state.acc += gap;
 
         const cap = 1000 / Math.max(1, state.fpsCap);
-        if (state.acc < cap) { state.rafId = requestAnimationFrame(tick); return; }
+        if (state.acc < cap) { scheduleFrame(); return; }
         const dt = Math.min(state.acc, 100) / 1000;   // 卡顿时钳制，避免粒子瞬移
         state.acc = 0;
 
@@ -530,10 +647,32 @@
         state.lastDraw = ts;
 
         const t0 = performance.now();
-        render(dt);
-        sampleQuality(gap, performance.now() - t0, drawGap, cap);
-
-        state.rafId = requestAnimationFrame(tick);
+        let changed = false;
+        try {
+            render(dt);
+            changed = sampleQuality(gap, performance.now() - t0, drawGap, cap);
+            state.errCount = 0;
+        } catch (e) {
+            state.errCount++;
+            diagEvent('fx-error', {
+                message: e && e.message ? e.message : String(e),
+                stack: e && e.stack ? String(e.stack).slice(0, 600) : '',
+                count: state.errCount
+            });
+            // 连续错误说明状态已经不可信：停下并留给 watchdog/诊断，不要热循环刷屏
+            if (state.errCount > 10) {
+                state.running = false;
+                state.rafGen++;
+                cancelFrame();
+                return;
+            }
+        }
+        if (changed) {
+            // 画质状态已经由 sampleQuality 改好；这里只负责重建循环时序
+            restartLoop('quality');
+            return;
+        }
+        scheduleFrame();
     }
 
     let curAlpha = -1;
@@ -706,50 +845,86 @@
     }
 
     // ================= 自适应质量 =================
+    // 关键修复：判据不再假设 60Hz。先学习当前设备的 rAF 基线，
+    // 30Hz / Chrome 省电模式 / MIUI 限帧下 33ms 是正常的，不能当掉帧。
     function sampleQuality(gap, drawMs, drawGap, targetGap) {
+        if (document.hidden || state.paused) return false;
+        if (!(gap > 0)) return false;
         // 合成器长时间不出帧（息屏 / 窗口被遮挡 / 切到后台）时不计入采样，恢复后重新学习
         if (gap > CFG.STALL_MS) {
             state.gapEma = 0; state.drawEma = 0; state.drawGapEma = 0;
             state.overMs = 0; state.okMs = 0;
-            return;
+            state.baselineGap = 0; state.baselineSamples = 0;
+            return false;
         }
+
+        // 基线学习：前 60 个有效帧取 EMA；太离谱的 gap 不参与，避免 4K 解码/GC 一次就学歪
+        if (state.baselineSamples < CFG.BASELINE_SAMPLES) {
+            if (gap < 120) {
+                state.baselineGap = state.baselineGap ? state.baselineGap * 0.9 + gap * 0.1 : gap;
+                state.baselineSamples++;
+            }
+            if (state.baselineSamples < CFG.BASELINE_SAMPLES) return false;
+        }
+        const base = Math.max(8, Math.min(50, state.baselineGap || 16.7));
 
         state.gapEma = state.gapEma ? state.gapEma * 0.88 + gap * 0.12 : gap;
         state.drawEma = state.drawEma ? state.drawEma * 0.88 + drawMs * 0.12 : drawMs;
         state.drawGapEma = state.drawGapEma ? state.drawGapEma * 0.88 + drawGap * 0.12 : drawGap;
 
-        // 两条通道都要看：
-        //   gapEma     —— 浏览器给的刷新节奏，反映 GPU/合成器是否真的画得动（跌破 30fps 才判卡）
-        //   drawGapEma —— 我们自己的出帧间隔，还要叠加帧率上限，所以按「目标间隔的倍数」判断，
-        //                 否则 30fps 档位下自身 33ms 的节奏会被误判成掉帧
-        const jank = state.gapEma > CFG.JANK_MS || state.drawEma > CFG.DRAW_BUDGET_MS ||
+        // 两条通道：
+        //   gapEma     —— 浏览器给的刷新节奏，按当前设备基线放大 1.6 倍判卡
+        //   drawGapEma —— 我们自己的出帧间隔，按目标帧间隔倍数判掉帧
+        const jank = state.gapEma > Math.max(CFG.JANK_MS, base * 1.6) ||
+                     state.drawEma > CFG.DRAW_BUDGET_MS ||
                      state.drawGapEma > targetGap * CFG.DRAW_SLACK;
-        const roomy = state.gapEma < CFG.ROOMY_MS && state.drawEma < CFG.DRAW_ROOMY_MS &&
+        const roomy = state.gapEma < base * 1.25 &&
+                      state.drawEma < CFG.DRAW_ROOMY_MS &&
                       state.drawGapEma < targetGap * CFG.DRAW_ROOMY_SLACK;
 
         if (jank) { state.overMs += drawGap; state.okMs = 0; }
         else if (roomy) { state.okMs += drawGap; state.overMs = 0; }
         else { state.overMs = 0; state.okMs = 0; }
 
-        if (state.overMs > CFG.DOWNGRADE_MS && state.downgrade < 3) {
+        const now = performance.now();
+        if (now - state.lastQualityChange < CFG.QUALITY_COOLDOWN_MS) return false;
+
+        if (state.overMs > CFG.QUALITY_DOWN_MS && state.downgrade < 3) {
             state.downgrade++;
             state.overMs = 0; state.okMs = 0;
+            state.lastQualityChange = now;
+            state.transitions++;
             applyQuality();
-        } else if (state.okMs > CFG.UPGRADE_MS && state.downgrade > 0) {
+            diagEvent('quality', {
+                dir: 'down', downgrade: state.downgrade, gap: +gap.toFixed(1),
+                base: +base.toFixed(1), drawMs: +drawMs.toFixed(2), drawGap: +drawGap.toFixed(1)
+            });
+            return true;
+        }
+        if (state.okMs > CFG.QUALITY_UP_MS && state.downgrade > 0) {
             state.downgrade--;
             state.overMs = 0; state.okMs = 0;
+            state.lastQualityChange = now;
+            state.transitions++;
             applyQuality();
+            diagEvent('quality', {
+                dir: 'up', downgrade: state.downgrade, gap: +gap.toFixed(1),
+                base: +base.toFixed(1), drawMs: +drawMs.toFixed(2), drawGap: +drawGap.toFixed(1)
+            });
+            return true;
         }
+        return false;
     }
 
-    // 把内部档位映射到 body 上的降级类（css 负责关毛玻璃 / 收暗角）
+    // 把内部档位映射到 body 上的降级类（只影响粒子/装饰，不再关毛玻璃）
     function syncBodyClasses() {
+        if (!document.body) return;
         document.body.classList.toggle('fx-low', state.downgrade >= 2 && state.level !== 'off');
         document.body.classList.toggle('fx-off', state.level === 'off');
     }
 
     function applyQuality() {
-        if (state.level === 'off') { stop(); syncBodyClasses(); return; }
+        if (state.level === 'off') { syncBodyClasses(); return; }
 
         let cap = CFG.FPS_CAP[state.level] || 30;
         state.noGlint = state.downgrade >= 1;
@@ -758,14 +933,9 @@
         if (state.reduced) cap = Math.min(cap, 20);
         state.fpsCap = cap;
 
-        if (state.running) { cancelAnimationFrame(state.rafId); state.running = false; }
         syncBodyClasses();
         buildPreset(state.preset, effectiveScale());
-        state.running = true;
-        state.last = 0;
-        state.lastDraw = 0;
-        state.acc = 0;
-        state.rafId = requestAnimationFrame(tick);
+        // 注意：这里不再自己 requestAnimationFrame；由 tick 末尾 / restartLoop 统一调度
     }
 
     // ================= 一次性特效 =================
@@ -884,16 +1054,51 @@
                 p.x *= sx; p.y *= sy;
                 if (p.y > state.h + 40) p.y = rnd(-state.h, 0);
             }
+            if (!document.hidden && !state.paused && state.level !== 'off' && !state.running) {
+                restartLoop('resize');
+            }
         }, 200);
     }
 
     function onVisibility() {
         if (!state.started) return;
         if (document.hidden) {
-            if (state.running) { cancelAnimationFrame(state.rafId); state.running = false; }
-        } else if (state.level !== 'off' && !state.running) {
-            state.running = true; state.last = 0; state.lastDraw = 0; state.acc = 0;
-            state.rafId = requestAnimationFrame(tick);
+            if (state.running) stop();
+            return;
+        }
+        // 恢复可见：重新学习刷新基线，别拿息屏期间的数据继续判断
+        state.baselineGap = 0;
+        state.baselineSamples = 0;
+        if (state.paused || state.level === 'off') return;
+        const age = state.lastTickAt ? performance.now() - state.lastTickAt : Infinity;
+        if (!state.running || age > CFG.TICK_STALL_MS) {
+            restartLoop('visibility');
+        }
+    }
+
+    let lastRecoverAt = 0;
+    function recoverIfNeeded() {
+        if (!state.started || state.paused || document.hidden || state.level === 'off') return;
+        const now = performance.now();
+        if (now - lastRecoverAt < 1000) return;   // 输入事件很多，1s 内只检查一次
+        const age = state.lastTickAt ? now - state.lastTickAt : Infinity;
+        if (!state.running || age > 1500 || state.rafLive > 1) {
+            lastRecoverAt = now;
+            restartLoop('recover');
+        }
+    }
+
+    function watchdog() {
+        if (!state.started) return;
+        if (document.hidden) {
+            if (state.running) stop();
+            return;
+        }
+        if (state.paused || state.level === 'off') return;
+        const now = performance.now();
+        const age = state.lastTickAt ? now - state.lastTickAt : Infinity;
+        if (!state.running || age > CFG.TICK_STALL_MS || state.rafLive > 1) {
+            restartLoop('watchdog');
         }
     }
 
@@ -901,6 +1106,13 @@
         window.addEventListener('resize', onResize);
         window.addEventListener('orientationchange', onResize);
         document.addEventListener('visibilitychange', onVisibility);
+        // 不只依赖 visibilitychange：MIUI/Chrome 偶发漏事件时，焦点/触摸/毛玻璃恢复也能救回来
+        window.addEventListener('pageshow', recoverIfNeeded);
+        window.addEventListener('focus', recoverIfNeeded);
+        window.addEventListener('pointerdown', recoverIfNeeded, { passive: true });
+        window.addEventListener('touchstart', recoverIfNeeded, { passive: true });
+        try { document.addEventListener('resume', recoverIfNeeded); } catch (e) { /* 忽略 */ }
+        setInterval(watchdog, CFG.WATCHDOG_MS);
     }
 
     // ================= 对外接口 =================
@@ -911,17 +1123,27 @@
         // 未配置过：低端机起手就轻一档
         try {
             const cores = navigator.hardwareConcurrency || 4;
-            const mem = navigator.deviceMemory;
-            // 有 deviceMemory 按内存/核心判断；没有时（iOS Safari / Firefox）
-            // 沿用与 LOW_MEM 相同的移动端兜底，避免老设备一上来就是标准档
-            const lowMem = (typeof mem === 'number') ? mem <= 2 : LOW_MEM;
-            if (cores <= 4 || lowMem) return 'light';
+            // 沿用与 LOW_MEM 相同的判断（Android 4GB 及以下、少核心、无 deviceMemory 的移动端）
+            if (cores <= 4 || LOW_MEM) return 'light';
         } catch (e) { /* 忽略 */ }
         return CFG.DEFAULT_LEVEL;
     }
 
+    function clearCanvas() {
+        if (!ctx || !cv) return;
+        try {
+            ctx.setTransform(state.dpr, 0, 0, state.dpr, 0, 0);
+            ctx.clearRect(0, 0, state.w, state.h);
+            curAlpha = -1;
+        } catch (e) { /* 忽略 */ }
+    }
+
     function start() {
-        if (state.started) return;
+        if (state.started) {
+            if (state.paused) setPaused(false);
+            else recoverIfNeeded();
+            return;
+        }
         ensureCanvas();
         if (!ctx) return;                  // 无 Canvas 支持：静默退出，不影响页面其它功能
         bakeSprites();
@@ -932,10 +1154,35 @@
         state.started = true;
         if (state.level === 'off') { syncBodyClasses(); return; }
         applyQuality();
+        restartLoop('start');
     }
 
     function stop() {
-        if (state.running) { cancelAnimationFrame(state.rafId); state.running = false; }
+        state.running = false;
+        state.rafGen++;
+        cancelFrame();
+    }
+
+    function setPaused(paused) {
+        paused = !!paused;
+        if (state.paused === paused) return;
+        state.paused = paused;
+        if (paused) {
+            state.running = false;
+            state.rafGen++;
+            cancelFrame();
+            diagEvent('fx-paused', { paused: true });
+        } else if (state.started && state.level !== 'off') {
+            restartLoop('unpaused');
+            diagEvent('fx-paused', { paused: false });
+        }
+    }
+
+    function refreshGlass() {
+        // 让 script.js 重新挂一次动态毛玻璃（Chromium 偶发丢 backdrop 表面时用）
+        try {
+            window.dispatchEvent(new CustomEvent('elaina:refresh-glass'));
+        } catch (e) { /* 忽略 */ }
     }
 
     function setLevel(level) {
@@ -943,11 +1190,21 @@
         state.level = level;
         try { localStorage.setItem(CFG.LEVEL_KEY, level); } catch (e) { /* 忽略 */ }
         if (!state.started) { start(); return; }
-        if (level === 'off') { stop(); syncBodyClasses(); return; }
+        if (level === 'off') {
+            stop();
+            clearCanvas();
+            syncBodyClasses();
+            return;
+        }
         state.downgrade = 0;
-        state.overMs = 0; state.okMs = 0;
+        state.overMs = 0;
+        state.okMs = 0;
+        state.baselineGap = 0;
+        state.baselineSamples = 0;
+        state.lastQualityChange = 0;
         fitCanvas();               // dpr 上限随档位变化（rich→2），画布需重设
         applyQuality();
+        if (!state.paused) restartLoop('setLevel');
     }
 
     function setWeather(type, opts) {
@@ -958,8 +1215,8 @@
         state.thunder = thunder;
         if (!state.started || state.level === 'off') return;
         buildPreset(next, effectiveScale());
-        // 雷阵雨：雨势再加一档
-        if (thunder && state.running) spawnGroup(PRESETS.rain[0], 18 / PRESETS.rain[0].count);
+        // 雷阵雨：雨势再加一档（暂停时也先建好，恢复后直接显示）
+        if (thunder) spawnGroup(PRESETS.rain[0], 18 / PRESETS.rain[0].count);
     }
 
     function setBackgroundTone(lum) {
@@ -974,8 +1231,17 @@
     window.ElainaFX = {
         start: start,
         stop: stop,
+        setPaused: setPaused,
+        refreshGlass: refreshGlass,
         setLevel: setLevel,
         getLevel: () => state.level,
+        getDeviceInfo: () => ({
+            lowMem: LOW_MEM,
+            cores: navigator.hardwareConcurrency || null,
+            deviceMemory: (typeof navigator.deviceMemory === 'number') ? navigator.deviceMemory : null,
+            dpr: state.dpr,
+            pixelBudget: state.pixelBudget
+        }),
         levelLabel: (lv) => LEVEL_LABEL[lv] || LEVEL_LABEL.normal,
         getLevels: () => LEVELS.slice(),
         setWeather: setWeather,
@@ -991,12 +1257,21 @@
             return {
                 started: state.started,
                 running: state.running,
+                paused: state.paused,
                 hidden: !!document.hidden,
                 level: state.level,
                 preset: state.preset,
                 tone: state.tone,
                 downgrade: state.downgrade,
+                transitions: state.transitions,
                 fpsCap: state.fpsCap,
+                rafLive: state.rafLive,
+                rafGen: state.rafGen,
+                tickAge: state.lastTickAt ? Math.round(performance.now() - state.lastTickAt) : -1,
+                tickCount: state.tickCount,
+                baselineGap: +state.baselineGap.toFixed(2),
+                pixelBudget: state.pixelBudget,
+                canvasPixels: cv ? cv.width * cv.height : 0,
                 gapMs: +state.gapEma.toFixed(2),
                 drawGapMs: +state.drawGapEma.toFixed(2),
                 drawMs: +state.drawEma.toFixed(2),

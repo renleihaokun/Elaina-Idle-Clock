@@ -25,6 +25,7 @@ const BEMFA_BROKER = 'wss://bemfa.com:9504/wss';
     let manualClose = true;        // 主动断开标记，防止 close 回调误触发重连
     let connectSeq = 0;            // 连接序号：异步加载库期间被新连接/断开取代时作废旧回调
     let mqttPromise = null;        // mqtt 动态加载的 Promise（只加载一次）
+    let lastBrightness = 100;      // 上次亮度，script.js 初始化时用来同步夜间黑屏状态
 
     const RETRY_BASE_MS = 5000;    // 首次重试 5s，之后翻倍
     const RETRY_MAX_MS = 300000;   // 封顶 5min，弱网挂机时别一直唤醒无线模块
@@ -35,6 +36,18 @@ const BEMFA_BROKER = 'wss://bemfa.com:9504/wss';
         console.warn('[巴法云] 未找到 #bemfa-mask 元素');
         return;
     }
+
+    // 首屏应用上次亮度：避免刷新后先亮一下再变黑（silent，交给 script.js 初始化时统一同步）
+    try {
+        var savedBrightness = parseFloat(localStorage.getItem('elaina_bemfa_brightness'));
+        if (isFinite(savedBrightness)) {
+            var prevTransition = mask.style.transition;
+            mask.style.transition = 'none';
+            setBrightness(savedBrightness, { silent: true });
+            void mask.offsetWidth;
+            mask.style.transition = prevTransition || '';
+        }
+    } catch (_) { /* 忽略 */ }
 
     // 更新设置面板中的连接状态显示
     function updateConnectionStatus(text, color) {
@@ -54,10 +67,20 @@ const BEMFA_BROKER = 'wss://bemfa.com:9504/wss';
      * 设置遮罩透明度
      * 亮度值 0~100 映射为透明度 0.98~0
      */
-    function setBrightness(brightness) {
+    function setBrightness(brightness, opts) {
         var val = Math.max(0, Math.min(100, brightness));
         var opacity = val >= 100 ? 0 : (1 - val / 100) * 0.98;
         mask.style.opacity = opacity;
+        lastBrightness = val;
+        try { localStorage.setItem('elaina_bemfa_brightness', String(val)); } catch (_) {}
+        // script.js 用这个事件暂停/恢复粒子和背景轮换；silent 用于首屏同步，避免重复处理
+        if (!opts || !opts.silent) {
+            try {
+                window.dispatchEvent(new CustomEvent('elaina:brightness', {
+                    detail: { value: val, opacity: opacity }
+                }));
+            } catch (_) {}
+        }
     }
 
     /**
@@ -93,8 +116,19 @@ const BEMFA_BROKER = 'wss://bemfa.com:9504/wss';
     function disconnect() {
         teardown();
         desired = false;
-        mask.style.opacity = 0;
+        setBrightness(100);
         updateConnectionStatus('未连接', '#ff9a9e');
+    }
+
+    // 夜间黑屏时单击屏幕：本地唤醒（不发 MQTT，下一条远程消息仍可覆盖）
+    function localWake() {
+        if (!document.body) return;
+        let dark = document.body.classList.contains('screen-dark');
+        if (!dark) {
+            try { dark = (parseFloat(getComputedStyle(mask).opacity) || 0) >= 0.9; } catch (e) { dark = false; }
+        }
+        if (!dark) return;
+        setBrightness(100);
     }
 
     // 连接失败后的指数退避重试：5s → 10s → … → 5min 封顶
@@ -231,8 +265,10 @@ const BEMFA_BROKER = 'wss://bemfa.com:9504/wss';
                 return;
             }
 
-            localStorage.setItem('elaina_bemfa_uid', uid);
-            localStorage.setItem('elaina_bemfa_topic', topic);
+            try {
+                localStorage.setItem('elaina_bemfa_uid', uid);
+                localStorage.setItem('elaina_bemfa_topic', topic);
+            } catch (e) { /* 忽略 */ }
             desired = true;
             connect(uid, topic);
         },
@@ -249,8 +285,10 @@ const BEMFA_BROKER = 'wss://bemfa.com:9504/wss';
          */
         clear: function () {
             disconnect();
-            localStorage.removeItem('elaina_bemfa_uid');
-            localStorage.removeItem('elaina_bemfa_topic');
+            try {
+                localStorage.removeItem('elaina_bemfa_uid');
+                localStorage.removeItem('elaina_bemfa_topic');
+            } catch (e) { /* 忽略 */ }
             var uidEl = document.getElementById('bemfa-uid');
             var topicEl = document.getElementById('bemfa-topic');
             if (uidEl) uidEl.value = '';
@@ -262,12 +300,35 @@ const BEMFA_BROKER = 'wss://bemfa.com:9504/wss';
          */
         isConnected: function () {
             return client && client.connected;
+        },
+
+        /**
+         * 上次亮度（0~100），script.js 初始化时同步夜间黑屏状态
+         */
+        getBrightness: function () {
+            return lastBrightness;
+        },
+
+        /**
+         * 本地唤醒：夜间黑屏时点一下屏幕就恢复，不发送 MQTT
+         */
+        localWake: function () {
+            localWake();
         }
     };
 
+    // 夜间黑屏单点唤醒（passive，不拦截正常点击）
+    ['pointerdown', 'touchstart'].forEach(function (evt) {
+        window.addEventListener(evt, localWake, { passive: true });
+    });
+
     // 页面加载时，若有保存的配置则自动连接
-    var savedUid = localStorage.getItem('elaina_bemfa_uid');
-    var savedTopic = localStorage.getItem('elaina_bemfa_topic');
+    var savedUid = '';
+    var savedTopic = '';
+    try {
+        savedUid = localStorage.getItem('elaina_bemfa_uid') || '';
+        savedTopic = localStorage.getItem('elaina_bemfa_topic') || '';
+    } catch (e) { /* 忽略 */ }
     if (savedUid && savedTopic) {
         desired = true;
         connect(savedUid, savedTopic);
