@@ -11,7 +11,7 @@
  *   4. 页面不可见时完全停止 rAF，不空转省电。
  *
  * 对外接口（window.ElainaFX）：
- *   start() / stop() / setPaused(bool)
+ *   start() / stop() / reset() / setPaused(bool)   reset()：页内自愈，释放并重建 canvas
  *   setLevel(level) / getLevel() / levelLabel(lv) / getLevels()
  *   setWeather(type, opts)                  type: 'sakura' | 'star' | 'rain' | 'snow' | 'fog'
  *   setBackgroundTone(lum)                  0~255，壁纸平均亮度，用于微调花瓣描边强弱
@@ -1163,6 +1163,39 @@
         cancelFrame();
     }
 
+    // 页内自愈：把 canvas 后备存储（GPU 纹理）整块放掉重建，但不刷新页面。
+    // 暂停中（夜间黑屏 / 设置面板打开）调用不会自己起循环——restartLoop 内部会判 paused。
+    function reset() {
+        if (!state.started) { start(); return; }
+        state.running = false;
+        state.rafGen++;
+        cancelFrame();
+        clearCanvas();
+        try {
+            // 写 0 是唯一能真正释放 backing store 的办法；随后 fitCanvas 会按当前视口重建
+            if (cv) { cv.width = 0; cv.height = 0; }
+        } catch (e) { /* 忽略 */ }
+        oneshots.length = 0;
+        state.errCount = 0;
+        state.overMs = 0;
+        state.okMs = 0;
+        state.gapEma = 0;
+        state.drawEma = 0;
+        state.drawGapEma = 0;
+        state.baselineGap = 0;
+        state.baselineSamples = 0;
+        state.lastQualityChange = 0;
+        state.last = 0;
+        state.lastDraw = 0;
+        state.acc = 0;
+        fitCanvas();
+        buildPreset(state.preset, effectiveScale());
+        syncBodyClasses();
+        state.lastTickAt = performance.now();
+        restartLoop('self-heal');
+        diagEvent('fx-reset', { level: state.level, paused: state.paused, rafLive: state.rafLive });
+    }
+
     function setPaused(paused) {
         paused = !!paused;
         if (state.paused === paused) return;
@@ -1231,6 +1264,7 @@
     window.ElainaFX = {
         start: start,
         stop: stop,
+        reset: reset,
         setPaused: setPaused,
         refreshGlass: refreshGlass,
         setLevel: setLevel,

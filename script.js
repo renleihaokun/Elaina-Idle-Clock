@@ -67,6 +67,15 @@ let state = {
     hiddenAt: 0,
     autoReload: false,
     autoReloadTimer: null,
+    selfHealing: false,           // 页内自愈进行中：审计/定时器别插队
+    selfHealCheckTimer: null,
+    bgHealCount: 0,               // 背景丢失已经软自愈过几轮，再失败才真刷新
+    fsWanted: false,              // 刷新前是否在全屏（见「全屏状态保持」）
+    fsWantedAt: 0,
+    fsClearTimer: null,
+    fsRestoreArmed: false,
+    fsRestorePending: false,
+    unloading: false,
     lastInteraction: Date.now(),
     toastTimer: null,
     timeTimer: null,
@@ -193,6 +202,17 @@ function init() {
 
     fetchWeather();
     initAutoReload();
+    initFullscreenRestore();  // 刷新前在全屏的话，等第一次点击把全屏补回来
+
+    // ?selfheal=1：不用等到 04:00，在手机上就能验收一次页内自愈
+    try {
+        if (/[?&]selfheal=1(&|$)/.test(location.search)) {
+            setTimeout(() => {
+                const ok = runSelfHeal('url');
+                showToast(ok ? '✅ 页内自愈完成（未刷新页面）' : '⚠️ 自愈被跳过');
+            }, 5000);
+        }
+    } catch (e) { /* 忽略 */ }
 }
 
 // ================= 特效接线 =================
@@ -1048,6 +1068,7 @@ function safeReload(reason) {
 
 function auditBackground() {
     if (document.hidden) return;
+    if (state.selfHealing) return;          // 自愈正在拆重建，别插一脚重启 FX
     if (state.maskDark) {
         const mask = document.getElementById('bemfa-mask');
         if (mask && (parseFloat(getComputedStyle(mask).opacity) || 0) < 0.5) syncMaskState();
@@ -1063,6 +1084,7 @@ function auditBackground() {
     if (activeGood) {
         if (activeOpacity < 0.05) active.style.opacity = '1';
         state.bgAuditFails = 0;
+        state.bgHealCount = 0;             // 背景恢复了，自愈轮次清零
     } else {
         if (active && activeSrc && active.naturalWidth === 0) active.style.opacity = '0';
         if (!activeSrc && other && !other.getAttribute('src')) applyFallbackBackground();
@@ -1074,7 +1096,17 @@ function auditBackground() {
         // 曾经有图、现在突然全没了，才按“黑屏故障”计数并做受保护的刷新。
         if (state.bgEverReady) {
             state.bgAuditFails++;
-            if (state.bgAuditFails >= 3) safeReload('background-lost');
+            if (state.bgAuditFails >= 3) {
+                state.bgAuditFails = 0;
+                // 先页内自愈（不丢全屏）；连自愈都救不回来，才做一次受保护的真刷新
+                if (state.bgHealCount < 1) {
+                    state.bgHealCount++;
+                    runSelfHeal('bg-lost');
+                } else {
+                    state.bgHealCount = 0;
+                    safeReload('background-lost');
+                }
+            }
         } else {
             state.bgAuditFails = 0;
         }
@@ -1360,6 +1392,128 @@ function refreshLiveGlass() {
     });
 }
 
+// ================= 全屏状态保持 =================
+// 浏览器规定 requestFullscreen 必须由用户手势发起，页面刷新后不可能自动进全屏
+// （WHATWG 仍在讨论 whatwg/fullscreen#262，Chromium 的自动全屏只给隔离 Web App）。
+// 所以策略是：能页内自愈就不刷新；万一真刷新了，记住「刷新前在全屏」，
+// 新文档的第一次点屏幕（任意位置，含夜间黑屏那一下唤醒）把全屏补回来。
+const FS_WANTED_KEY = 'elaina_fs_wanted';
+
+function isFullscreen() {
+    return !!(document.fullscreenElement || document.webkitFullscreenElement || document.msFullscreenElement);
+}
+
+// 统一的进全屏入口：吞掉拒绝（无手势时 Chrome 会抛 SecurityError），返回是否真的进去了
+function requestFullscreenSafe() {
+    const el = document.documentElement;
+    const fn = el.requestFullscreen ? 'requestFullscreen'
+        : (el.webkitRequestFullscreen ? 'webkitRequestFullscreen'
+        : (el.msRequestFullscreen ? 'msRequestFullscreen' : ''));
+    if (!fn) return Promise.resolve(false);
+    try {
+        const p = el[fn]();
+        if (p && typeof p.then === 'function') return p.then(() => isFullscreen(), () => false);
+        return Promise.resolve(isFullscreen());
+    } catch (e) {
+        return Promise.resolve(false);
+    }
+}
+
+function readFsWanted() {
+    try { return sessionStorage.getItem(FS_WANTED_KEY) === '1'; } catch (e) { return false; }
+}
+
+function writeFsWanted(on) {
+    state.fsWanted = !!on;
+    state.fsWantedAt = on ? Date.now() : 0;
+    try {
+        if (on) sessionStorage.setItem(FS_WANTED_KEY, '1');
+        else sessionStorage.removeItem(FS_WANTED_KEY);
+    } catch (e) { /* 隐私模式/配额：忽略 */ }
+}
+
+// 退出全屏时故意延迟 2s 再清标记：刷新过程中 fullscreenchange 与 pagehide 谁先谁后不确定，
+// 立刻清会把「刷新前在全屏」这条信息抹掉。页面卸载时定时器不会执行，标记因此留存；
+// 真手动退出（Esc / 下滑）则 2s 后被清掉，下次打开不会莫名抢全屏。
+function scheduleClearFsWanted() {
+    clearTimeout(state.fsClearTimer);
+    state.fsClearTimer = setTimeout(() => {
+        state.fsClearTimer = null;
+        if (!isFullscreen()) writeFsWanted(false);
+    }, 2000);
+}
+
+function onFullscreenChange() {
+    if (isFullscreen()) {
+        clearTimeout(state.fsClearTimer);
+        state.fsClearTimer = null;
+        writeFsWanted(true);
+        diag('fullscreen', { on: true });
+    } else if (!state.unloading) {
+        scheduleClearFsWanted();
+        diag('fullscreen', { on: false });
+    }
+}
+
+const FS_GESTURES = ['pointerdown', 'touchend', 'mouseup', 'keydown'];
+let fsRestoreHandler = null;
+
+function disarmFullscreenRestore() {
+    if (!state.fsRestoreArmed) return;
+    const h = fsRestoreHandler;
+    fsRestoreHandler = null;
+    state.fsRestoreArmed = false;
+    FS_GESTURES.forEach(evt => {
+        try { window.removeEventListener(evt, h, { capture: true }); } catch (e) { /* 忽略 */ }
+    });
+}
+
+// 挂一次性恢复：一次手势里 pointerdown/touchend/mouseup 会连着来，用 fsRestorePending 去重
+function armFullscreenRestore() {
+    if (state.fsRestoreArmed) return;
+    state.fsRestoreArmed = true;
+    const onGesture = () => {
+        if (!state.fsWanted || isFullscreen()) { disarmFullscreenRestore(); return; }
+        if (state.fsRestorePending) return;
+        state.fsRestorePending = true;
+        requestFullscreenSafe().then(ok => {
+            state.fsRestorePending = false;
+            if (ok) {
+                disarmFullscreenRestore();
+                diag('fullscreen-restore', { ok: true, mode: 'gesture' });
+            } else {
+                // 这次手势没被认（或被系统拦了）：继续挂着等下一次，不打扰用户
+                diag('fullscreen-restore', { ok: false, mode: 'gesture' });
+            }
+        });
+    };
+    fsRestoreHandler = onGesture;
+    FS_GESTURES.forEach(evt => {
+        try { window.addEventListener(evt, onGesture, { capture: true, passive: true }); } catch (e) { /* 忽略 */ }
+    });
+    if (!state.maskDark) showToast('轻点屏幕恢复全屏');
+    diag('fullscreen-arm', {});
+}
+
+function initFullscreenRestore() {
+    state.fsWanted = readFsWanted();
+    if (!state.fsWanted || isFullscreen()) return;
+    // 明确没有用户激活过就别去撞墙（Chrome 会甩一条 Failed to execute 的报错），直接等首次点击
+    try {
+        if (navigator.userActivation && navigator.userActivation.hasBeenActive === false) {
+            diag('fullscreen-restore', { ok: false, mode: 'no-activation' });
+            armFullscreenRestore();
+            return;
+        }
+    } catch (e) { /* 旧内核没有 userActivation：继续乐观尝试 */ }
+    // 个别内核（PWA / WebView / kiosk）在加载阶段会放行，先乐观试一次；被拒再等第一次点击
+    requestFullscreenSafe().then(ok => {
+        if (ok) { diag('fullscreen-restore', { ok: true, mode: 'load' }); return; }
+        diag('fullscreen-restore', { ok: false, mode: 'load' });
+        armFullscreenRestore();
+    });
+}
+
 // ================= 夜间黑屏 / 自愈刷新 =================
 function syncFxPaused() {
     const api = fx();
@@ -1452,15 +1606,113 @@ function scheduleAutoReload(delayMs) {
     state.autoReloadTimer = setTimeout(() => {
         state.autoReloadTimer = null;
         if (!state.autoReload) return;
-        // 最近 10 分钟有交互就顺延，别在用户正在看的时候刷新
-        if (document.hidden || Date.now() - state.lastInteraction > 10 * 60 * 1000) {
-            try { sessionStorage.setItem('elaina_last_reload', String(Date.now())); } catch (e) { /* 忽略 */ }
-            diag('auto-reload', {});
-            try { location.reload(); } catch (e) { /* 忽略 */ }
+        // 最近 10 分钟有交互就顺延，别在用户正在看的时候动它的画面
+        if (Date.now() - state.lastInteraction > 10 * 60 * 1000) {
+            diag('auto-reload', { mode: 'self-heal' });
+            // 不再 location.reload()：整页刷新必然退出全屏，还得人工点回去
+            if (!runSelfHeal('daily')) scheduleAutoReload(30 * 60 * 1000);
             return;
         }
         scheduleAutoReload(30 * 60 * 1000);
     }, Math.max(1000, delay));
+}
+
+// ================= 页内软自愈（不刷新） =================
+// 老版本每天 04:00 直接 location.reload()：刷新一定退出全屏、还会释放 Wake Lock，
+// 用户第二天得进设置手动点「切换全屏模式」。改成页内回收重建后，导航没有发生，
+// document.fullscreenElement 原样保留，零点击。
+// 回收对象：粒子 canvas 后备存储（GPU 纹理）、壁纸解码层、静态毛玻璃、MQTT 长连接、计时器。
+function runSelfHeal(trigger) {
+    if (state.selfHealing) return false;
+    // 设置面板打开时 FX 是暂停的，不在面板里拆重建，10 分钟后再来
+    if (state.panelOpen) { scheduleAutoReload(10 * 60 * 1000); return false; }
+
+    state.selfHealing = true;
+    const startedAt = Date.now();
+    const before = activeBgEl();
+    const hadBg = !!(before && before.naturalWidth > 0);
+    diag('self-heal-start', {
+        trigger: trigger || '', fs: isFullscreen(),
+        hidden: !!document.hidden, dark: !!state.maskDark
+    });
+
+    try {
+        // 1) 粒子引擎：停链 → 释放 canvas 后备存储 → 重建粒子（暂停中调用不会自己起循环）
+        const api = fx();
+        if (api && typeof api.reset === 'function') api.reset();
+        else if (api) { api.stop(); api.start(); }
+
+        // 2) 壁纸：作废在途加载，换一张新图到非当前层；解码成功才切，失败保留旧图
+        state.bgSeq++;
+        state.bgPending = null;
+        clearTimeout(state.bgPreloadTimer);
+        state.bgPreloadTimer = null;
+        state.bgApplying = false;
+        state.thumbManifestAt = 0;                 // 顺手换一次 manifest，别一直吃 24h 缓存
+        const kickBg = () => {
+            preloadNextBackground().then(ok => {
+                if (!ok) { diag('self-heal-bg-failed', {}); return; }
+                applyPendingBackground();
+            }).catch(() => { /* preload 内部已记录 */ });
+        };
+        if (state.bgLoading) state.bgLoading.then(kickBg, kickBg);
+        else kickBg();
+
+        // 3) 静态毛玻璃：先按当前层重建一次 dataURL；换图成功后 applyPendingBackground 会再建一次
+        if (state.glassMode === 'static') buildGlassFromCurrent();
+
+        // 4) MQTT：重连一次（老问题是断线后只能靠刷新恢复）
+        try {
+            if (window.Bemfa && typeof Bemfa.reconnect === 'function') Bemfa.reconnect();
+        } catch (e) { /* 忽略 */ }
+
+        // 5) 计时器：重新挂明天的 04:00 和壁纸轮换
+        scheduleAutoReload();
+        scheduleBackgroundSwitch();
+
+        // 6) 踢一下合成器，并把夜间黑屏/暂停状态复原
+        kickCompositor();
+        syncMaskState();
+        syncFxPaused();
+
+        // 7) 30s 后自检：只记录 + 补一次恢复，升级刷新统一交给背景审计那条路
+        clearTimeout(state.selfHealCheckTimer);
+        state.selfHealCheckTimer = setTimeout(() => {
+            state.selfHealCheckTimer = null;
+            verifySelfHeal({ trigger: trigger, hadBg: hadBg, startedAt: startedAt });
+        }, 30000);
+
+        diag('self-heal', { trigger: trigger || '', ms: Date.now() - startedAt, hadBg: hadBg, fs: isFullscreen() });
+        return true;
+    } catch (e) {
+        diag('self-heal-error', { message: e && e.message ? e.message : String(e) });
+        return false;
+    } finally {
+        state.selfHealing = false;
+    }
+}
+
+function verifySelfHeal(ctx) {
+    const problems = [];
+    try {
+        const active = activeBgEl();
+        if (ctx && ctx.hadBg && !(active && active.naturalWidth > 0)) problems.push('bg');
+
+        const api = fx();
+        const s = (api && api.stats) ? api.stats() : null;
+        if (s && !document.hidden && !state.maskDark && !state.panelOpen && s.level !== 'off') {
+            if (!s.running) { problems.push('fx-stopped'); if (api.start) api.start(); }
+            else if (s.tickAge > 5000) { problems.push('fx-stale'); if (api.start) api.start(); kickCompositor(); }
+            if (s.rafLive > 1) problems.push('raf-multi');
+        }
+        diag('self-heal-result', {
+            ok: problems.length === 0, problems: problems,
+            trigger: (ctx && ctx.trigger) || '',
+            ms: Date.now() - ((ctx && ctx.startedAt) || Date.now())
+        });
+    } catch (e) {
+        diag('self-heal-verify-error', { message: e && e.message ? e.message : String(e) });
+    }
 }
 
 function initAutoReload() {
@@ -1494,6 +1746,12 @@ function setupEventListeners() {
     });
     window.addEventListener('resize', onViewportChange);
     window.addEventListener('orientationchange', onViewportChange);
+
+    // 全屏状态跟踪：进入/退出都记一笔；pagehide 时不能再清标记（那正是「刷新前在全屏」的证据）
+    document.addEventListener('fullscreenchange', onFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', onFullscreenChange);
+    window.addEventListener('pagehide', () => { state.unloading = true; });
+    window.addEventListener('pageshow', () => { state.unloading = false; });
     window.addEventListener('elaina:brightness', e => {
         const d = e && e.detail ? e.detail : {};
         syncMaskState(d);
@@ -1748,29 +2006,24 @@ function updateBattery() {
 }
 
 function toggleFullScreen() {
-    const req = (el, fn) => {
-        try {
-            const p = el && el[fn] ? el[fn]() : null;
-            if (p && typeof p.catch === 'function') p.catch(() => {});
-        } catch (e) { /* 忽略 */ }
-    };
-    if (!document.fullscreenElement) {
-        if (document.documentElement.requestFullscreen) {
-            req(document.documentElement, 'requestFullscreen');
-        } else if (document.documentElement.webkitRequestFullscreen) {
-            req(document.documentElement, 'webkitRequestFullscreen');
-        } else if (document.documentElement.msRequestFullscreen) {
-            req(document.documentElement, 'msRequestFullscreen');
-        }
-    } else {
-        if (document.exitFullscreen) {
-            req(document, 'exitFullscreen');
-        } else if (document.webkitExitFullscreen) {
-            req(document, 'webkitExitFullscreen');
-        } else if (document.msExitFullscreen) {
-            req(document, 'msExitFullscreen');
-        }
+    if (!isFullscreen()) {
+        requestFullscreenSafe().then(ok => {
+            if (!ok) diag('fullscreen-request-failed', {});
+        });
+        return;
     }
+    // 用户主动退出：立刻清掉「想要全屏」标记，免得下次加载莫名抢全屏
+    clearTimeout(state.fsClearTimer);
+    state.fsClearTimer = null;
+    writeFsWanted(false);
+    const fn = document.exitFullscreen ? 'exitFullscreen'
+        : (document.webkitExitFullscreen ? 'webkitExitFullscreen'
+        : (document.msExitFullscreen ? 'msExitFullscreen' : ''));
+    if (!fn) return;
+    try {
+        const p = document[fn]();
+        if (p && typeof p.catch === 'function') p.catch(() => {});
+    } catch (e) { /* 忽略 */ }
 }
 
 window.togglePanel = togglePanel;
@@ -1778,6 +2031,7 @@ window.searchLocation = searchLocation;
 window.autoLocate = autoLocate;
 window.fetchWitchQuote = fetchWitchQuote;
 window.toggleFullScreen = toggleFullScreen;
+window.elainaSelfHeal = runSelfHeal;   // 排障/验收用：控制台直接调 elainaSelfHeal('manual')
 
 // 用 DOMContentLoaded 而不是 load：不等待字体、农历库、背景图等外部资源，
 // 老手机弱网下时钟能先跑起来，农历库晚到也会在后续每秒 tick 里自动接上

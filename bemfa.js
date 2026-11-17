@@ -281,6 +281,17 @@ const BEMFA_BROKER = 'wss://bemfa.com:9504/wss';
         },
 
         /**
+         * 页内自愈时重连一次：以前断线只能靠刷新页面恢复，现在不用了。
+         * 不动遮罩亮度、不改 desired，夜间黑屏不会被它点亮。
+         */
+        reconnect: function () {
+            if (!desired) return false;
+            reconnectDelay = 0;
+            connect(retryUid, retryTopic);
+            return true;
+        },
+
+        /**
          * 断开连接并清除所有配置（由"断开并清除配置"按钮调用）
          */
         clear: function () {
