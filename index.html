@@ -14,7 +14,7 @@
     <script src="https://cdn.jsdelivr.net/npm/lunar-javascript/lunar.min.js" async></script>
     
     <!-- 本地样式 -->
-    <link rel="stylesheet" href="style.css?v=20261117">
+    <link rel="stylesheet" href="style.css?v=20261118">
 </head>
 <body>
     <!-- 课表上传隐藏输入 -->
@@ -96,6 +96,12 @@
                 <option value="live">动态（实时模糊）</option>
                 <option value="static">静态（预模糊壁纸）</option>
             </select>
+            <p>壁纸比例过滤: <span id="bg-aspect-value">标准（裁切 ≤20%）</span></p>
+            <select id="bg-aspect-select" title="按手机屏幕比例过滤掉铺满全屏要裁太多的图（比如方图）；设置会记住">
+                <option value="standard">标准（裁切 ≤20%，推荐）</option>
+                <option value="loose">宽松（裁切 ≤35%）</option>
+                <option value="off">关闭（不过滤，按老规矩只挑横图）</option>
+            </select>
             <label class="setting-check" title="每天 04:00 在页面内重建粒子、壁纸、毛玻璃和连接，不刷新页面、不退出全屏、不释放屏幕常亮"><input type="checkbox" id="auto-reload-toggle"> 每日 04:00 自愈（不刷新页面）</label>
             <button class="close-btn" style="width:100%; margin-bottom: 10px; background: rgba(129, 236, 236, 0.2); border-color: rgba(129, 236, 236, 0.4);" onclick="toggleFullScreen()">🖥️ 切换全屏模式</button>
             <hr class="divider">
@@ -130,12 +136,12 @@
     <div id="toast" role="status" aria-live="polite"></div>
 
     <!-- 诊断先加载：尽早挂错误钩子 -->
-    <script src="diag.js?v=20261117" defer></script>
+    <script src="diag.js?v=20261118" defer></script>
     <!-- 巴法云亮度控制（mqtt 库由 bemfa.js 按需异步加载，避免 CDN 阻塞首屏） -->
     <script src="bemfa.js?v=20261117" defer></script>
 
     <!-- 核心逻辑 -->
     <script src="effects.js?v=20261117" defer></script>
-    <script src="script.js?v=20261117" defer></script>
+    <script src="script.js?v=20261118" defer></script>
 </body>
 </html>

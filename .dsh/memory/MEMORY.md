@@ -8,6 +8,7 @@
 - 自适应判据：先学 `baselineGap`（当前设备 rAF 基线），`jank = gapEma > max(34, base*1.6)`，`roomy = gapEma < base*1.25`；不要写死 60Hz / 24ms，否则 30Hz 省电模式下降级后永远升不回去
 - `fx-low` 只降粒子/帧率/装饰动画，**不再关毛玻璃**；毛玻璃由 `body.glass-static` / `glass-live` 决定，低端机静态、高档机动态
 - 壁纸：优先 `https://elaina.haokun.me/imgs/thumb/manifest.json` 的 640px 缩略图 + 两个 `<img>` 双缓冲；4K 原图只做非低端兜底。`Image + CSS background` 会重复解码/黑屏，不要再回去
+- 壁纸比例过滤：`pickNextThumb()` 走 `buildThumbPool()`，按「铺满全屏要裁掉多少」`crop = 1 - min(图比例, 屏幕比例)/max(两者)` 筛，默认 ≤0.20；池子 <10 张自动降档（0.15 一档），最后一级全量。目标比例取 `screen` 长短边归一（**不要**改回视口比例，没全屏时会把 16:9 误杀）；档位存 `localStorage.elaina_bg_aspect`
 - 静态玻璃：64px 缩小 → 256px 平滑放大 → 叠暗色 → JPEG dataURL；4 个 widget 按 `transform-origin` + `offsetLeft/Top` 算 `background-size/position`，不要用透明边 blur
 - sprite 烘焙 2x 超采样（`BAKE_SS`），绘制时缩回 CSS 尺寸；fog 保持 1x（放大 1.5~2.2 倍绘制，糊是特性）
 - 旋转变体 24/24/32 档；`p.rot` 单位是**弧度**，变体下标换算在 `drawPetal`（曾经是"变体序号"，踩过 3 倍转速陷阱）
@@ -34,4 +35,5 @@
 - 2026-10-09 粒子视觉优化 S1~S6（去取整/弧度化/花瓣重画/2x烘焙/DPR分档/alpha收窄/构建淡入/星雨风 sprite 化/双频摇摆），验证 drawMs≈0.2ms。详见 `.dsh/memory/2026-10-09.md`
 - 2026-11-07 低端机长期稳定性专项修复（自适应采样双通道、iOS 低内存兜底、Wake Lock、背景超时/图层释放、MQTT 退避、XSS 与解析容错）。详见 `.dsh/memory/2026-11-07.md`
 - 2026-11-17 凌晨自愈不再刷新页面（改页内软自愈），刷新场景用全屏意图标记在首次点击时自动恢复全屏。详见 `.dsh/memory/2026-11-17.md`
+- 2026-11-17 晚 壁纸按手机屏幕比例过滤：方图/近方图不再选中（红米 8A 19:9 上方图要裁 52.6%），设置面板可切标准/宽松/关闭，诊断条加裁切百分比。详见 `.dsh/memory/2026-11-17.md` 追加节
 - 2026-11-08 32 位 Android 长跑专项（4K 原图/重复解码 → 640 缩略图 + `<img>` 双缓冲；rAF 多链 bug；30Hz 基线；静态毛玻璃；夜间暂停/本地唤醒；诊断与受保护自愈刷新）。详见 `.dsh/memory/2026-11-08.md`

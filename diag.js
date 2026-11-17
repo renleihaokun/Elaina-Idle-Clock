@@ -190,7 +190,18 @@
         const active = (b1 && b1.opacity >= 0.5 && b1.natural[0]) ? b1 : (b2 && b2.opacity >= 0.5 && b2.natural[0] ? b2 : null);
         if (!active) return 'none';
         const kind = /imgs\/thumb\//.test(active.src) ? 'thumb' : 'orig';
-        return kind + ' ' + active.natural[0] + 'x' + active.natural[1];
+        // 顺带显示"铺满全屏要裁掉多少"，手机上 ?diag=1 一眼就能看出有没有漏网
+        let crop = '';
+        try {
+            const iw = active.natural[0], ih = active.natural[1];
+            if (iw > 0 && ih > 0 && screen.width && screen.height) {
+                const box = Math.max(screen.width, screen.height) / Math.min(screen.width, screen.height);
+                const img = iw / ih;
+                const c = 1 - Math.min(img, box) / Math.max(img, box);
+                crop = ' c' + Math.round(c * 100) + '%';
+            }
+        } catch (e) { crop = ''; }
+        return kind + ' ' + active.natural[0] + 'x' + active.natural[1] + crop;
     }
 
     function renderOverlay() {

@@ -434,7 +434,8 @@ input[type=range] {
     accent-color: #a1c4fd;
 }
 
-#glass-mode-select {
+#glass-mode-select,
+#bg-aspect-select {
     width: 100%;
     padding: 8px;
     border-radius: 8px;

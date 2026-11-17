@@ -12,6 +12,10 @@ const CONFIG = {
     THUMB_TIMEOUT_MS: 8000,
     BG_SWITCH_MINUTES: 5,
     BG_LOAD_TIMEOUT_MS: 12000,
+    BG_ASPECT_LIMIT: { standard: 0.20, loose: 0.35 },               // 最大可接受裁切比例（0.2 = 最多切掉 20%）
+    BG_ASPECT_MIN_POOL: 10,                                        // 候选池少于这个数就放宽一档
+    BG_ASPECT_TIER_STEP: 0.15,                                     // 每放宽一档加多少
+    BG_ORIG_ASPECT_TRIES: 3,                                       // 随机原图兜底最多试几张（每张都有 12s 超时）
     BG_PRELOAD_DELAY_MS: 1800,                                     // 旧层淡出后再预加载下一张，避免打断过渡
     WEATHER_UPDATE_MINUTES: 30,
     QUOTE_UPDATE_MINUTES: 10,
@@ -57,6 +61,7 @@ let state = {
     thumbManifest: null,
     thumbManifestAt: 0,
     thumbVersion: '',
+    bgAspectMode: 'standard',     // 壁纸比例过滤：standard | loose | off
     glassPref: 'auto',
     glassMode: 'static',
     glassImageUrl: '',
@@ -182,6 +187,7 @@ function requestWakeLock() {
 function init() {
     state.autoReload = loadAutoReloadPref();
     initGlassMode();          // 先定毛玻璃模式，避免首屏先 live 再切 static 闪一下
+    initBgAspect();           // 壁纸比例过滤先定档位，首屏那张就按它选
     startFX();
     setupUI();
     setupEventListeners();
@@ -907,15 +913,135 @@ async function loadThumbManifest() {
     }
 }
 
-function pickNextThumb(images) {
-    const landscape = images.filter(im => im.w >= im.h);
-    const pool = landscape.length ? landscape : images;
-    if (!pool.length) return null;
-    for (let i = 0; i < 10; i++) {
-        const im = pool[Math.floor(Math.random() * pool.length)];
-        if (String(im.name) !== String(state.bgCurrentName)) return im;
+// ===== 壁纸比例过滤 =====
+// 判据是「铺满全屏要裁掉多少」，不是单纯比宽高谁大：
+//   crop = 1 - min(图比例, 屏幕比例) / max(两者)，0 = 刚好吻合，0.5 = 只剩一半。
+// 目标比例取设备屏幕（长短边归一）：红米 8A 报 360×760，比值 2.11，横竖屏都算得对。
+// 方图 640×640 在 19:9 屏上是 0.526，直接被挡掉；16:9 是 0.158，留着。
+function deviceAspectRatio() {
+    let a = 0;
+    try {
+        const sw = Number(screen.width) || 0;
+        const sh = Number(screen.height) || 0;
+        if (sw > 0 && sh > 0) a = Math.max(sw, sh) / Math.min(sw, sh);
+    } catch (e) { a = 0; }
+    if (!isFinite(a) || a < 0.5) {
+        const vw = Math.max(1, Number(window.innerWidth) || 0);
+        const vh = Math.max(1, Number(window.innerHeight) || 0);
+        a = Math.max(vw, vh) / Math.min(vw, vh);
     }
-    return pool[0];
+    return (isFinite(a) && a >= 0.5) ? a : 2.0;
+}
+
+function coverCropOf(imgRatio, targetRatio) {
+    if (!isFinite(imgRatio) || imgRatio <= 0) return 1;
+    const hi = Math.max(imgRatio, targetRatio);
+    if (!isFinite(hi) || hi <= 0) return 1;
+    return 1 - Math.min(imgRatio, targetRatio) / hi;
+}
+
+// 按「裁切量」挑候选池；池子太小就逐档放宽，最后一档永远是全部图，保证不会空池
+function buildThumbPool(images) {
+    const target = deviceAspectRatio();
+    const total = images ? images.length : 0;
+    if (!total) return { pool: [], tier: -1, limit: 0, target: target };
+
+    const scored = [];
+    for (let i = 0; i < images.length; i++) {
+        const im = images[i];
+        scored.push({ im: im, crop: coverCropOf(im.w / im.h, target), landscape: im.w >= im.h });
+    }
+
+    const limit = bgAspectLimit();
+    if (limit <= 0) {
+        // 关闭：回到老规矩——只挑横图；一张横图都没有再全给
+        const pool = [];
+        for (let i = 0; i < scored.length; i++) if (scored[i].landscape) pool.push(scored[i].im);
+        return { pool: pool.length ? pool : images.slice(), tier: -1, limit: 0, target: target };
+    }
+
+    const tiers = [];
+    for (let t = limit; t < 1 - 1e-6; t += CONFIG.BG_ASPECT_TIER_STEP) tiers.push(Math.min(1, +t.toFixed(2)));
+    if (!tiers.length || tiers[tiers.length - 1] < 1) tiers.push(1);
+
+    for (let ti = 0; ti < tiers.length; ti++) {
+        const pool = [];
+        for (let i = 0; i < scored.length; i++) if (scored[i].crop <= tiers[ti]) pool.push(scored[i].im);
+        const fresh = [];
+        for (let i = 0; i < pool.length; i++) {
+            if (String(pool[i].name) !== String(state.bgCurrentName)) fresh.push(pool[i]);
+        }
+        const enough = pool.length >= CONFIG.BG_ASPECT_MIN_POOL && fresh.length > 0;
+        if (enough || ti === tiers.length - 1) {
+            return { pool: pool.length ? pool : images.slice(), tier: ti, limit: tiers[ti], target: target };
+        }
+    }
+    return { pool: images.slice(), tier: tiers.length - 1, limit: 1, target: target };
+}
+
+function pickNextThumb(images) {
+    if (!images || !images.length) return null;
+    const built = buildThumbPool(images);
+    const pool = built.pool;
+    diag('bg-pool', {
+        total: images.length, kept: pool.length, tier: built.tier,
+        limit: built.limit, ratio: +built.target.toFixed(3)
+    });
+    if (!pool.length) return null;
+    if (pool.length === 1) return pool[0];
+    // 池子里还有别的图就一定换一张，避免「抽 10 次还是自己」
+    const fresh = [];
+    for (let i = 0; i < pool.length; i++) {
+        if (String(pool[i].name) !== String(state.bgCurrentName)) fresh.push(pool[i]);
+    }
+    const src = fresh.length ? fresh : pool;
+    return src[Math.floor(Math.random() * src.length)];
+}
+
+// 壁纸比例过滤档位：存 localStorage，默认 standard
+function readBgAspectPref() {
+    try {
+        const v = localStorage.getItem('elaina_bg_aspect');
+        if (v === 'standard' || v === 'loose' || v === 'off') return v;
+    } catch (e) { /* 忽略 */ }
+    return 'standard';
+}
+
+function bgAspectLimit() {
+    const limits = CONFIG.BG_ASPECT_LIMIT;
+    const limit = limits ? limits[state.bgAspectMode] : 0;
+    return (typeof limit === 'number' && isFinite(limit) && limit > 0) ? limit : 0;
+}
+
+function updateBgAspectLabel() {
+    const el = document.getElementById('bg-aspect-value');
+    if (!el) return;
+    const limit = bgAspectLimit();
+    if (limit <= 0) el.textContent = '关闭';
+    else el.textContent = (limit <= 0.21 ? '标准' : '宽松') + '（裁切 ≤' + Math.round(limit * 100) + '%）';
+}
+
+function initBgAspect() {
+    state.bgAspectMode = readBgAspectPref();
+    const sel = document.getElementById('bg-aspect-select');
+    if (sel) sel.value = state.bgAspectMode;
+    updateBgAspectLabel();
+}
+
+function applyBgAspect(pref) {
+    state.bgAspectMode = (pref === 'loose' || pref === 'off') ? pref : 'standard';
+    try { localStorage.setItem('elaina_bg_aspect', state.bgAspectMode); } catch (e) { /* 忽略 */ }
+    const sel = document.getElementById('bg-aspect-select');
+    if (sel) sel.value = state.bgAspectMode;
+    updateBgAspectLabel();
+    diag('bg-aspect-setting', { mode: state.bgAspectMode });
+    // 当前这张已经不达标就立刻换一张，让用户马上看到效果；达标就别动画面
+    const active = activeBgEl();
+    if (active && active.naturalWidth > 0) {
+        const limit = bgAspectLimit();
+        const crop = coverCropOf(active.naturalWidth / active.naturalHeight, deviceAspectRatio());
+        if (limit > 0 && crop > limit) scheduleBackgroundSwitch(1200);
+    }
 }
 
 function thumbUrl(im) {
@@ -971,21 +1097,34 @@ function preloadNextBackground() {
                 if (seq !== state.bgSeq || layer !== inactiveBgEl()) return false;
                 if (ok) {
                     state.bgPending = { layer: layer, url: url, name: String(im.name), kind: 'thumb' };
-                    diag('bg-preload', { kind: 'thumb', name: String(im.name), w: layer.naturalWidth, h: layer.naturalHeight });
+                    diag('bg-preload', {
+                        kind: 'thumb', name: String(im.name),
+                        w: layer.naturalWidth, h: layer.naturalHeight,
+                        crop: +coverCropOf(layer.naturalWidth / layer.naturalHeight, deviceAspectRatio()).toFixed(3)
+                    });
                     return true;
                 }
             }
         }
 
-            // 缩略图全挂：只在非低端设备上退回原图；低端机宁可保留上一张/渐变，也不冒 4K 解码的险
+            // 缩略图全挂：只在非低端设备上退回原图；低端机宁可保留上一张/渐变，也不冒 4K 解码的险。
+            // 随机原图没有尺寸参数，只能解码后再按比例判：超标就换一张重试，全部超标就用最后一张（不能黑屏）。
             if (!isLowEndDevice()) {
-                const url = `${CONFIG.API_URL}/?t=${Date.now()}`;
-                const ok = await loadLayer(layer, url);
-                if (seq !== state.bgSeq || layer !== inactiveBgEl()) return false;
-                if (ok) {
-                    state.bgPending = { layer: layer, url: url, name: '', kind: 'orig' };
-                    diag('bg-preload', { kind: 'orig', w: layer.naturalWidth, h: layer.naturalHeight });
-                    return true;
+                const limit = bgAspectLimit();
+                const tries = Math.max(1, CONFIG.BG_ORIG_ASPECT_TRIES | 0);
+                for (let attempt = 0; attempt < tries; attempt++) {
+                    const url = `${CONFIG.API_URL}/?t=${Date.now()}-${attempt}`;
+                    const ok = await loadLayer(layer, url);
+                    if (seq !== state.bgSeq || layer !== inactiveBgEl()) return false;
+                    if (!ok) continue;
+                    const crop = coverCropOf(layer.naturalWidth / layer.naturalHeight, deviceAspectRatio());
+                    const last = attempt === tries - 1;
+                    if (limit <= 0 || crop <= limit || last) {
+                        state.bgPending = { layer: layer, url: url, name: '', kind: 'orig' };
+                        diag('bg-preload', { kind: 'orig', w: layer.naturalWidth, h: layer.naturalHeight, crop: +crop.toFixed(3) });
+                        return true;
+                    }
+                    diag('bg-orig-aspect-skip', { w: layer.naturalWidth, h: layer.naturalHeight, crop: +crop.toFixed(3) });
                 }
             }
             return false;
@@ -1034,7 +1173,10 @@ function applyPendingBackground() {
         if (!document.hidden && !state.maskDark) preloadNextBackground();
     }, 1900);
 
-    diag('bg-apply', { kind: p.kind, name: p.name, w: next.naturalWidth, h: next.naturalHeight });
+    diag('bg-apply', {
+        kind: p.kind, name: p.name, w: next.naturalWidth, h: next.naturalHeight,
+        crop: +coverCropOf(next.naturalWidth / next.naturalHeight, deviceAspectRatio()).toFixed(3)
+    });
     return true;
 }
 
@@ -1726,11 +1868,13 @@ function setupEventListeners() {
     const slider = document.getElementById('scale-slider');
     const fxSlider = document.getElementById('fx-level-slider');
     const glassSelect = document.getElementById('glass-mode-select');
+    const bgAspectSelect = document.getElementById('bg-aspect-select');
     const autoToggle = document.getElementById('auto-reload-toggle');
     const ics = document.getElementById('ics-upload');
     if (slider) slider.addEventListener('input', e => updateUIScale(e.target.value));
     if (fxSlider) fxSlider.addEventListener('input', e => applyFxLevel(parseInt(e.target.value, 10)));
     if (glassSelect) glassSelect.addEventListener('change', e => applyGlassMode(e.target.value));
+    if (bgAspectSelect) bgAspectSelect.addEventListener('change', e => applyBgAspect(e.target.value));
     if (autoToggle) autoToggle.addEventListener('change', e => setAutoReload(e.target.checked));
     if (ics) ics.addEventListener('change', handleIcsUpload);
 
@@ -2032,6 +2176,30 @@ window.autoLocate = autoLocate;
 window.fetchWitchQuote = fetchWitchQuote;
 window.toggleFullScreen = toggleFullScreen;
 window.elainaSelfHeal = runSelfHeal;   // 排障/验收用：控制台直接调 elainaSelfHeal('manual')
+// 壁纸比例过滤的排障钩子：看当前档位、屏幕比例、候选池和当前这张的裁切量
+window.elainaBgInfo = function () {
+    const images = state.thumbManifest || [];
+    const built = buildThumbPool(images);
+    const active = activeBgEl();
+    const pool = [];
+    for (let i = 0; i < built.pool.length; i++) {
+        const im = built.pool[i];
+        pool.push({ name: String(im.name), crop: +coverCropOf(im.w / im.h, built.target).toFixed(3) });
+    }
+    return {
+        mode: state.bgAspectMode,
+        ratio: +built.target.toFixed(3),
+        total: images.length,
+        kept: built.pool.length,
+        tier: built.tier,
+        limit: built.limit,
+        current: state.bgCurrentName,
+        currentCrop: (active && active.naturalWidth)
+            ? +coverCropOf(active.naturalWidth / active.naturalHeight, built.target).toFixed(3) : null,
+        pool: pool
+    };
+};
+window.elainaNextBg = function (reason) { return changeBackground(reason || 'manual'); };
 
 // 用 DOMContentLoaded 而不是 load：不等待字体、农历库、背景图等外部资源，
 // 老手机弱网下时钟能先跑起来，农历库晚到也会在后续每秒 tick 里自动接上
